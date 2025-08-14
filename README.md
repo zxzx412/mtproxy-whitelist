@@ -51,7 +51,7 @@ Web管理端口:
 
 ```bash
 # 下载项目
-git clone https://github.com/your-repo/mtproxy-whitelist.git
+git clone https://github.com/zxzx412/mtproxy-whitelist.git
 cd mtproxy-whitelist
 
 
@@ -63,7 +63,7 @@ sudo ./deploy.sh
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-repo/mtproxy-whitelist.git
+git clone https://github.com/zxzx412/mtproxy-whitelist.git
 cd mtproxy-whitelist
 cp .env.example .env
 # 启动服务
@@ -324,6 +324,6 @@ mtproxy-whitelist/
 
 ---
 
-📞 **技术支持**: 如遇问题，请提交 [Issue](https://github.com/your-repo/mtproxy-whitelist/issues)
+📞 **技术支持**: 如遇问题，请提交 [Issue](https://github.com/zxzx412/mtproxy-whitelist/issues)
 
 🌟 **如果这个项目对您有帮助，请给个 Star！**
