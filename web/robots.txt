@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /api/
+Disallow: /data/
+Allow: /
+
+# MTProxy Whitelist Management System
+# This is a private system, crawling is discouraged

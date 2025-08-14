@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MTProxy 白名单管理系统</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+    <!-- 加载动画 -->
+    <div id="loading" class="loading">
+        <div class="loading-spinner"></div>
+        <p>正在加载...</p>
+    </div>
+
+    <!-- 登录界面 -->
+    <div id="login-container" class="login-container hidden">
+        <div class="login-box">
+            <div class="logo">
+                <h1>🛡️ MTProxy</h1>
+                <p>白名单管理系统</p>
+            </div>
+            
+            <form id="login-form" class="login-form">
+                <div class="form-group">
+                    <label for="username">用户名</label>
+                    <input type="text" id="username" name="username" required 
+                           autocomplete="username" placeholder="请输入用户名">
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">密码</label>
+                    <input type="password" id="password" name="password" required 
+                           autocomplete="current-password" placeholder="请输入密码">
+                </div>
+                
+                <button type="submit" class="login-btn">登录</button>
+                
+                <div id="login-error" class="error-message hidden"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 主管理界面 -->
+    <div id="main-container" class="main-container hidden">
+        <!-- 头部导航 -->
+        <header class="header">
+            <div class="header-content">
+                <h1><span class="logo-icon">🛡️</span> MTProxy 白名单管理</h1>
+                <div class="header-actions">
+                    <span class="user-info">欢迎, <span id="current-user">管理员</span></span>
+                    <button id="logout-btn" class="logout-btn">退出登录</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主内容区域 -->
+        <main class="main-content">
+            <!-- 统计卡片 -->
+            <section class="stats-section">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">📊</div>
+                        <div class="stat-content">
+                            <h3 id="total-entries">0</h3>
+                            <p>总白名单条目</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon">🌐</div>
+                        <div class="stat-content">
+                            <h3 id="ipv4-entries">0</h3>
+                            <p>IPv4 条目</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon">🌍</div>
+                        <div class="stat-content">
+                            <h3 id="ipv6-entries">0</h3>
+                            <p>IPv6 条目</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card" id="status-card">
+                        <div class="stat-icon">⚡</div>
+                        <div class="stat-content">
+                            <h3 id="service-status">检查中...</h3>
+                            <p>服务状态</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card" id="connections-allowed">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-content">
+                            <h3 id="allowed-count">0</h3>
+                            <p>今日允许连接</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card" id="connections-denied">
+                        <div class="stat-icon">🚫</div>
+                        <div class="stat-content">
+                            <h3 id="denied-count">0</h3>
+                            <p>今日拒绝连接</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 连接监控面板 -->
+            <section class="connection-monitor-section">
+                <div class="monitor-header">
+                    <h2>🔍 连接监控</h2>
+                    <div class="monitor-controls">
+                        <button id="toggle-monitor-btn" class="btn btn-secondary">
+                            <span class="btn-icon">⏸️</span> 暂停监控
+                        </button>
+                        <button id="clear-logs-btn" class="btn btn-secondary">
+                            <span class="btn-icon">🗑️</span> 清空日志
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="monitor-content">
+                    <div class="monitor-tabs">
+                        <button class="tab-btn active" data-tab="recent">最近连接</button>
+                        <button class="tab-btn" data-tab="statistics">连接统计</button>
+                        <button class="tab-btn" data-tab="blocked">被拒绝IP</button>
+                    </div>
+                    
+                    <!-- 最近连接标签页 -->
+                    <div id="recent-tab" class="tab-content active">
+                        <div class="connections-list">
+                            <div class="connections-header">
+                                <span class="col-time">时间</span>
+                                <span class="col-ip">IP地址</span>
+                                <span class="col-status">状态</span>
+                                <span class="col-location">位置</span>
+                                <span class="col-action">操作</span>
+                            </div>
+                            <div id="connections-tbody" class="connections-body">
+                                <div class="empty-connections">
+                                    <div class="empty-icon">👁️</div>
+                                    <p>等待连接监控数据...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 连接统计标签页 -->
+                    <div id="statistics-tab" class="tab-content">
+                        <div class="stats-charts">
+                            <div class="chart-container">
+                                <h3>24小时连接趋势</h3>
+                                <div id="hourly-chart" class="chart-placeholder">
+                                    <canvas id="hourly-canvas" width="400" height="200"></canvas>
+                                </div>
+                            </div>
+                            <div class="stats-summary">
+                                <div class="summary-item">
+                                    <span class="summary-label">总连接数</span>
+                                    <span id="total-connections" class="summary-value">0</span>
+                                </div>
+                                <div class="summary-item">
+                                    <span class="summary-label">成功率</span>
+                                    <span id="success-rate" class="summary-value">0%</span>
+                                </div>
+                                <div class="summary-item">
+                                    <span class="summary-label">唯一IP数</span>
+                                    <span id="unique-ips" class="summary-value">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 被拒绝IP标签页 -->
+                    <div id="blocked-tab" class="tab-content">
+                        <div class="blocked-ips-list">
+                            <div class="blocked-header">
+                                <span class="col-ip">IP地址</span>
+                                <span class="col-count">尝试次数</span>
+                                <span class="col-last">最后尝试</span>
+                                <span class="col-location">位置</span>
+                                <span class="col-action">操作</span>
+                            </div>
+                            <div id="blocked-ips-tbody" class="blocked-body">
+                                <div class="empty-blocked">
+                                    <div class="empty-icon">🛡️</div>
+                                    <p>暂无被拒绝的IP地址</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 操作面板 -->
+            <section class="actions-section">
+                <div class="actions-header">
+                    <h2>白名单管理</h2>
+                    <div class="action-buttons">
+                        <button id="add-ip-btn" class="btn btn-primary">
+                            <span class="btn-icon">➕</span> 添加IP
+                        </button>
+                        <button id="refresh-btn" class="btn btn-secondary">
+                            <span class="btn-icon">🔄</span> 刷新
+                        </button>
+                        <button id="export-btn" class="btn btn-secondary">
+                            <span class="btn-icon">📥</span> 导出
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 添加IP表单 -->
+                <div id="add-ip-form" class="add-form hidden">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="ip-input">IP地址或IP段</label>
+                            <input type="text" id="ip-input" placeholder="例如: 192.168.1.100 或 192.168.1.0/24">
+                            <small class="form-hint">支持IPv4、IPv6地址及CIDR格式的网段</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="description-input">描述 (可选)</label>
+                            <input type="text" id="description-input" placeholder="例如: 办公室网络">
+                        </div>
+                        
+                        <div class="form-actions">
+                            <button id="save-ip-btn" class="btn btn-success">保存</button>
+                            <button id="cancel-add-btn" class="btn btn-cancel">取消</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 白名单列表 -->
+            <section class="whitelist-section">
+                <div class="whitelist-container">
+                    <div class="list-header">
+                        <div class="search-container">
+                            <input type="text" id="search-input" placeholder="搜索IP地址或描述..." class="search-input">
+                            <span class="search-icon">🔍</span>
+                        </div>
+                        
+                        <div class="list-controls">
+                            <select id="filter-type" class="filter-select">
+                                <option value="all">全部类型</option>
+                                <option value="ipv4">仅IPv4</option>
+                                <option value="ipv6">仅IPv6</option>
+                                <option value="range">仅网段</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="whitelist-table-container">
+                        <table class="whitelist-table">
+                            <thead>
+                                <tr>
+                                    <th class="col-ip">IP地址/网段</th>
+                                    <th class="col-type">类型</th>
+                                    <th class="col-description">描述</th>
+                                    <th class="col-added">添加时间</th>
+                                    <th class="col-actions">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="whitelist-tbody">
+                                <!-- 白名单条目将在这里动态加载 -->
+                            </tbody>
+                        </table>
+                        
+                        <div id="empty-state" class="empty-state hidden">
+                            <div class="empty-icon">📝</div>
+                            <h3>暂无白名单条目</h3>
+                            <p>点击"添加IP"按钮来添加您的第一个白名单条目</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- 确认删除对话框 -->
+    <div id="delete-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>确认删除</h3>
+            <p>确定要删除这个白名单条目吗？</p>
+            <div class="modal-actions">
+                <button id="confirm-delete-btn" class="btn btn-danger">删除</button>
+                <button id="cancel-delete-btn" class="btn btn-cancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 通知消息 -->
+    <div id="notification" class="notification hidden">
+        <div class="notification-content">
+            <span class="notification-icon"></span>
+            <span class="notification-message"></span>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

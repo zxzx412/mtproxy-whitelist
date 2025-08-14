@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  mtproxy-whitelist:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: mtproxy-whitelist
+    restart: unless-stopped
+    
+    # 正确的端口流程: 客户端 → 外部端口 → nginx白名单验证(443) → MTProxy(444)
+    ports:
+      - "${MTPROXY_PORT:-8765}:443"     # 外部端口 → nginx白名单验证(443)
+      - "${WEB_PORT:-8888}:8888"        # Web管理界面端口 (固定)
+      # 注意: MTProxy在444端口运行，通过nginx 443端口代理
+      # 注意: 8081统计端口在容器内部，不对外暴露
+    
+    # 环境变量配置
+    environment:
+      - MTPROXY_DOMAIN=${MTPROXY_DOMAIN:-azure.microsoft.com}
+      - MTPROXY_TAG=${MTPROXY_TAG:-}
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - MTPROXY_PORT=${MTPROXY_PORT:-8765}    # 外部端口，用于nginx stream配置
+      - INTERNAL_MTPROXY_PORT=444             # MTProxy实际运行端口
+      - NGINX_STREAM_PORT=443                 # nginx内部监听端口
+      - WEB_PORT=${WEB_PORT:-8888}            # Web管理端口 (固定)
+      - API_PORT=8080                         # API内部端口 (不对外)
+    
+    # 数据卷挂载
+    volumes:
+      - mtproxy_data:/data
+      - mtproxy_logs:/var/log
+      - mtproxy_config:/opt/mtproxy
+    
+    # 网络配置
+    network_mode: "bridge"
+    
+    # 健康检查 (使用容器内部端口)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    
+    # 安全配置
+    security_opt:
+      - no-new-privileges:true
+    
+    # 临时文件系统挂载
+    tmpfs:
+      - /tmp:size=100M,noexec,nosuid,nodev
+      - /var/run:size=100M,noexec,nosuid,nodev
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # 添加标签用于识别
+    labels:
+      - "traefik.enable=false"
+      - "com.mtproxy.whitelist=true"
+      - "com.mtproxy.version=4.0"
+      - "com.mtproxy.whitelist.mapping=fixed"
+      - "com.mtproxy.api.sync=enabled"
+      - "com.mtproxy.reload.script=integrated"
+
+# 数据卷定义
+volumes:
+  mtproxy_data:
+    driver: local
+  mtproxy_logs:
+    driver: local  
+  mtproxy_config:
+    driver: local

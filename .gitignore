@@ -1,0 +1,88 @@
+# MTProxy 白名单系统 .gitignore
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 日志文件
+*.log
+logs/
+*.out
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 备份文件
+*.backup
+*.bak
+*.orig
+
+# 缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# 环境文件
+.env
+.env.local
+.env.*.local
+venv/
+env/
+ENV/
+
+# Docker 相关
+.dockerignore
+
+# IDE 文件
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 配置文件（包含敏感信息）
+config/
+data/
+*.key
+*.pem
+*.crt
+
+# 运行时文件
+pid/
+*.pid
+*.sock
+
+# 压缩文件
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# 文档生成
+site/
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
