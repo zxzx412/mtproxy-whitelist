@@ -21,7 +21,18 @@ fi
 
 # 初始化nginx配置
 mkdir -p /etc/nginx/conf.d /data/nginx
-cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
+
+# 设置默认端口值（防止环境变量未设置）
+export WEB_PORT=${WEB_PORT:-8888}
+export MTPROXY_PORT=${MTPROXY_PORT:-8765}
+
+echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_PORT}"
+
+# 替换环境变量并生成最终配置
+envsubst '$WEB_PORT $MTPROXY_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+
+echo "nginx配置文件内容预览："
+head -20 /etc/nginx/nginx.conf
 
 # 初始化白名单文件和映射
 echo "127.0.0.1" > /data/nginx/whitelist.txt

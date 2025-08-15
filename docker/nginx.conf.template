@@ -13,7 +13,7 @@ http {
     include /etc/nginx/mime.types;
     
     server {
-        listen 8888;
+        listen ${WEB_PORT};
         root /usr/share/nginx/html;
         index index.html;
         
@@ -66,9 +66,9 @@ stream {
         server 127.0.0.1:9999; # 不存在的端口，自动拒绝连接
     }
 
-    # 白名单验证服务器 - 监听443端口
+    # 白名单验证服务器 - 监听${MTPROXY_PORT}端口
     server {
-        listen 443;
+        listen ${MTPROXY_PORT};
         proxy_pass $backend_pool;
         proxy_timeout 10s;
         proxy_connect_timeout 3s;

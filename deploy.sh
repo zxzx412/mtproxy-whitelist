@@ -246,9 +246,51 @@ get_user_config() {
     print_info "配置 MTProxy 参数"
     print_line
     
+    # NAT模式选择
+    print_info "网络部署模式选择"
+    echo "请选择部署模式："
+    echo "1. 标准模式 (bridge) - 适用于直连服务器"
+    echo "2. NAT模式 (host) - 适用于NAT环境/内网映射"
+    echo ""
+    echo "NAT模式说明："
+    echo "• 使用host网络模式，直接绑定主机端口"
+    echo "• 适用于内网服务器通过NAT转发的场景"
+    echo "• 无需额外端口映射配置"
+    echo ""
+    
+    while true; do
+        echo -n "请选择部署模式 [1-2] (默认: 1): "
+        read DEPLOY_MODE_INPUT
+        DEPLOY_MODE=${DEPLOY_MODE_INPUT:-1}
+        
+        case $DEPLOY_MODE in
+            1)
+                NAT_MODE="false"
+                NETWORK_MODE="bridge"
+                print_success "选择标准模式 (bridge网络)"
+                break
+                ;;
+            2)
+                NAT_MODE="true"
+                NETWORK_MODE="host"
+                print_success "选择NAT模式 (host网络)"
+                print_info "NAT模式下容器将直接使用主机网络"
+                break
+                ;;
+            *)
+                print_error "请输入有效选项 [1-2]"
+                ;;
+        esac
+    done
+    echo ""
+    
     # 新架构端口配置说明
-    print_info "新架构端口配置指南"
-    echo "正确流程: 客户端 → 外部端口 → nginx白名单验证(443) → MTProxy(444)"
+    print_info "端口配置指南"
+    if [[ "$NAT_MODE" == "true" ]]; then
+        echo "NAT模式流程: 客户端 → NAT转发 → 主机端口 → nginx白名单验证 → MTProxy(444)"
+    else
+        echo "标准模式流程: 客户端 → 外部端口 → Docker映射 → nginx白名单验证 → MTProxy(444)"
+    fi
     echo ""
     echo "端口说明："
     echo "  外部MTProxy端口 (可自定义):"
@@ -335,20 +377,26 @@ get_user_config() {
     echo
     WEB_PASSWORD=${WEB_PASSWORD:-$DEFAULT_ADMIN_PASSWORD}
     
-    # 新架构配置确认
+    # 配置确认
     print_line
-    print_info "新架构配置确认"
+    print_info "配置确认"
     print_line
-    echo -e "外部MTProxy端口: ${GREEN}$MTPROXY_PORT${NC} → 内部nginx(443) 白名单验证"
-    echo -e "外部Web管理端口: ${GREEN}$WEB_PORT${NC} → 内部Web(8888)"
+    echo -e "部署模式: ${GREEN}$([ "$NAT_MODE" == "true" ] && echo "NAT模式 (host网络)" || echo "标准模式 (bridge网络)")${NC}"
+    echo -e "MTProxy端口: ${GREEN}$MTPROXY_PORT${NC} → nginx白名单验证"
+    echo -e "Web管理端口: ${GREEN}$WEB_PORT${NC}"
     echo -e "MTProxy运行端口: ${GREEN}444${NC} (内部固定)"
     echo -e "统计端口: ${GREEN}8081${NC} (内部，不对外)"
     echo -e "伪装域名: ${GREEN}$FAKE_DOMAIN${NC}"
     echo -e "推广TAG: ${GREEN}${PROMO_TAG:-"未设置"}${NC}"
     echo -e "管理密码: ${GREEN}[已设置]${NC}"
     echo ""
-    echo -e "${BLUE}流程说明: 客户端 → $MTPROXY_PORT → nginx白名单(443) → MTProxy(444) → telegram.org${NC}"
-    echo -e "${BLUE}Web管理: 浏览器 → $WEB_PORT → Web服务(8888) → API(8080)${NC}"
+    if [[ "$NAT_MODE" == "true" ]]; then
+        echo -e "${BLUE}NAT模式流程: 客户端 → NAT转发 → $MTPROXY_PORT → nginx白名单验证 → MTProxy(444)${NC}"
+        echo -e "${BLUE}Web管理: 浏览器 → NAT转发 → $WEB_PORT → Web服务${NC}"
+    else
+        echo -e "${BLUE}标准模式流程: 客户端 → $MTPROXY_PORT → Docker映射 → nginx白名单验证 → MTProxy(444)${NC}"
+        echo -e "${BLUE}Web管理: 浏览器 → $WEB_PORT → Docker映射 → Web服务${NC}"
+    fi
     echo
     
     echo -n "确认配置无误？(y/N): "
@@ -385,9 +433,9 @@ prepare_deployment() {
     print_success "部署文件检查完成"
 }
 
-# 生成环境配置文件（支持自定义端口）
+# 生成环境配置文件（支持NAT模式和自定义端口）
 generate_config() {
-    print_info "生成环境配置文件 (端口: $MTPROXY_PORT, $WEB_PORT)..."
+    print_info "生成环境配置文件 (模式: $([ "$NAT_MODE" == "true" ] && echo "NAT" || echo "标准"), 端口: $MTPROXY_PORT, $WEB_PORT)..."
     
     # 生成随机密钥
     SECRET_KEY=$(openssl rand -hex 32)
@@ -396,6 +444,10 @@ generate_config() {
     cat > .env << EOF
 # MTProxy 白名单系统配置文件
 # 生成时间: $(date)
+
+# 网络模式配置
+NAT_MODE=$NAT_MODE
+NETWORK_MODE=$NETWORK_MODE
 
 # 端口配置
 MTPROXY_PORT=$MTPROXY_PORT
@@ -435,6 +487,18 @@ deploy_service() {
     print_info "构建 Docker 镜像..."
     docker system prune -f
     docker-compose build --no-cache
+    
+    # 处理NAT模式配置冲突
+    if [[ "$NAT_MODE" == "true" ]]; then
+        print_info "NAT模式：处理host网络模式配置..."
+        # 备份原配置
+        if [[ ! -f "docker-compose.yml.backup" ]]; then
+            cp docker-compose.yml docker-compose.yml.backup
+        fi
+        # 移除端口映射配置（host网络模式不兼容）
+        sed '/# 端口映射 - 仅在bridge模式下使用/,/- "${WEB_PORT:-8888}:${WEB_PORT:-8888}"/d' docker-compose.yml.backup > docker-compose.yml
+        print_info "已移除端口映射配置，使用host网络直接绑定"
+    fi
     
     # 启动服务
     print_info "启动服务容器..."

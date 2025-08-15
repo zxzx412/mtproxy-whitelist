@@ -8,12 +8,10 @@ services:
     container_name: mtproxy-whitelist
     restart: unless-stopped
     
-    # 正确的端口流程: 客户端 → 外部端口 → nginx白名单验证(443) → MTProxy(444)
+    # 端口映射 - 仅在bridge模式下使用
     ports:
-      - "${MTPROXY_PORT:-8765}:443"     # 外部端口 → nginx白名单验证(443)
-      - "${WEB_PORT:-8888}:8888"        # Web管理界面端口 (固定)
-      # 注意: MTProxy在444端口运行，通过nginx 443端口代理
-      # 注意: 8081统计端口在容器内部，不对外暴露
+      - "${MTPROXY_PORT:-8765}:${MTPROXY_PORT:-8765}"
+      - "${WEB_PORT:-8888}:${WEB_PORT:-8888}"
     
     # 环境变量配置
     environment:
@@ -22,11 +20,11 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - MTPROXY_PORT=${MTPROXY_PORT:-8765}    # 外部端口，用于nginx stream配置
-      - INTERNAL_MTPROXY_PORT=444             # MTProxy实际运行端口
-      - NGINX_STREAM_PORT=443                 # nginx内部监听端口
-      - WEB_PORT=${WEB_PORT:-8888}            # Web管理端口 (固定)
-      - API_PORT=8080                         # API内部端口 (不对外)
+      - MTPROXY_PORT=${MTPROXY_PORT:-8765}      # MTProxy代理端口，nginx监听此端口
+      - INTERNAL_MTPROXY_PORT=444               # MTProxy实际运行端口
+      - WEB_PORT=${WEB_PORT:-8888}              # Web管理端口变量化
+      - API_PORT=8080                           # API内部端口
+      - NAT_MODE=${NAT_MODE:-false}             # NAT模式开关
     
     # 数据卷挂载
     volumes:
@@ -34,12 +32,12 @@ services:
       - mtproxy_logs:/var/log
       - mtproxy_config:/opt/mtproxy
     
-    # 网络配置
-    network_mode: "bridge"
+    # 网络配置 - 支持NAT模式动态切换
+    network_mode: "${NETWORK_MODE:-bridge}"
     
-    # 健康检查 (使用容器内部端口)
+    # 健康检查 (使用变量端口)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:${WEB_PORT:-8888}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
