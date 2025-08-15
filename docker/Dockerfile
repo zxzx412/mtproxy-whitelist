@@ -72,6 +72,8 @@ RUN chmod +x /entrypoint.sh
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8888/health || exit 1
 
-EXPOSE 443 444 8888
+# 端口通过docker-compose.yml动态配置，不在此处固定暴露
+# 外部访问端口: ${MTPROXY_PORT}, ${WEB_PORT}
+# 内部端口443(nginx白名单)、444(MTProxy)、8888(nginx web)不直接暴露
 
 ENTRYPOINT ["/entrypoint.sh"]
