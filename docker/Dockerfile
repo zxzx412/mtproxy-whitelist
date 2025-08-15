@@ -68,9 +68,8 @@ RUN chmod +x /usr/local/bin/reload-whitelist.sh /usr/local/bin/generate-whitelis
 # 设置entrypoint权限
 RUN chmod +x /entrypoint.sh
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8888/health || exit 1
+# 健康检查通过docker-compose.yml配置，使用动态端口
+# HEALTHCHECK在此处会固化端口，移除以使用compose中的变量配置
 
 # 端口通过docker-compose.yml动态配置，不在此处固定暴露
 # 外部访问端口: ${MTPROXY_PORT}, ${WEB_PORT}
