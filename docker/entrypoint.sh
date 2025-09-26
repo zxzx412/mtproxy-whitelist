@@ -28,11 +28,26 @@ export MTPROXY_PORT=${MTPROXY_PORT:-8765}
 
 echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_PORT}"
 
+# 根据NAT模式配置nginx监听端口
+if [ "${NAT_MODE:-false}" = "true" ]; then
+    echo "🔧 NAT模式：配置nginx监听外部端口443用于HAProxy连接"
+    # NAT模式下，nginx需要监听443端口接收HAProxy的连接
+    export NGINX_STREAM_PORT=443
+else
+    echo "🔧 Bridge模式：配置nginx监听内部端口443"
+    # Bridge模式下，nginx监听443，Docker映射外部端口到443
+    export NGINX_STREAM_PORT=443
+fi
+
 # 替换环境变量并生成最终配置
-envsubst '$WEB_PORT $MTPROXY_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 echo "nginx配置文件内容预览："
 head -20 /etc/nginx/nginx.conf
+
+# 显示stream配置部分
+echo "nginx stream配置预览："
+grep -A 10 "listen.*;" /etc/nginx/nginx.conf | head -15
 
 # 初始化白名单文件和映射
 echo "127.0.0.1" > /data/nginx/whitelist.txt

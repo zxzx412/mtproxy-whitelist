@@ -75,8 +75,8 @@ stream {
     server {
         # 注意：此配置会在部署时根据网络模式动态调整
         # bridge模式：监听内部端口443，由Docker映射到外部端口
-        # NAT/host模式：直接监听外部端口
-        listen 443;
+        # NAT/host模式：监听443端口接收HAProxy连接
+        listen ${NGINX_STREAM_PORT};
         proxy_pass $backend_pool;
         proxy_timeout 10s;
         proxy_connect_timeout 3s;

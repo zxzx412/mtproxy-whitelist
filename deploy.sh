@@ -837,24 +837,6 @@ EOF
     print_success "NAT环境PROXY Protocol配置完成"
 }
 
-# 根据网络模式配置nginx
-configure_nginx_for_network_mode() {
-    print_info "配置nginx网络模式..."
-    
-    if [[ "$NAT_MODE" == "true" ]]; then
-        print_info "NAT模式：配置nginx直接监听外部端口"
-        # NAT/host模式：直接监听用户配置的外部端口
-        sed -i "s/listen 443;/listen $MTPROXY_PORT;/" "$PROJECT_DIR/docker/nginx.conf.template"
-        print_success "nginx已配置为NAT模式，监听端口: $MTPROXY_PORT"
-    else
-        print_info "Bridge模式：配置nginx监听内部端口443"
-        # Bridge模式：监听内部端口443，由Docker映射到外部端口
-        sed -i "s/listen [0-9]\+;/listen 443;/" "$PROJECT_DIR/docker/nginx.conf.template"
-        print_success "nginx已配置为Bridge模式，内部端口443 -> 外部端口$MTPROXY_PORT"
-    fi
-    
-    print_debug "nginx stream监听配置已更新"
-}
 
 # 创建管理脚本
 create_management_script() {
@@ -980,9 +962,6 @@ main() {
     
     # 部署服务
     deploy_service
-    
-    # 根据网络模式配置nginx
-    configure_nginx_for_network_mode
     
     # NAT环境自动配置PROXY Protocol
     if [[ "$NAT_MODE" == "true" ]]; then
