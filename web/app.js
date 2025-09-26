@@ -524,6 +524,20 @@ class MTProxyManager {
                 if (this.currentTab === 'recent') {
                     this.renderConnections();
                 }
+                
+                // 显示调试信息
+                if (connectionsResponse.debug) {
+                    console.log('连接监控调试信息:', connectionsResponse.debug);
+                    
+                    // 如果没有连接记录且日志文件存在，可能是解析问题
+                    if (this.connections.length === 0 && 
+                        connectionsResponse.debug.log_file_exists && 
+                        connectionsResponse.debug.log_file_size > 0) {
+                        console.warn('日志文件存在但无连接记录，可能是解析问题');
+                        // 测试日志解析
+                        this.testLogParsing();
+                    }
+                }
             }
             
             // 加载被拒绝的IP
@@ -546,6 +560,25 @@ class MTProxyManager {
             }
         } catch (error) {
             console.error('Load connection data error:', error);
+            if (error.message.includes('Unauthorized')) {
+                this.showNotification('登录已过期，请重新登录', 'warning');
+            } else {
+                this.showNotification('加载连接数据失败', 'error');
+            }
+        }
+    }
+    
+    async testLogParsing() {
+        try {
+            const response = await this.apiCall('GET', '/connections/test-parse');
+            if (response.success) {
+                console.log('日志解析测试结果:', response);
+                if (response.parsed_successfully === 0 && response.total_lines_tested > 0) {
+                    this.showNotification('检测到nginx日志解析问题，请检查日志格式', 'warning');
+                }
+            }
+        } catch (error) {
+            console.error('测试日志解析失败:', error);
         }
     }
     

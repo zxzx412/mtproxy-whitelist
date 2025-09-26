@@ -42,6 +42,29 @@ echo "::1" >> /data/nginx/whitelist.txt
 echo "生成nginx白名单映射配置..."
 /usr/local/bin/generate-whitelist-map.sh generate
 
+# 检测NAT环境配置
+echo "检测NAT环境配置..."
+if [ "${NAT_MODE:-false}" = "true" ]; then
+    echo "🔍 检测到NAT模式"
+    echo "⚠️  NAT环境需要手动配置白名单或启用透明代理"
+    echo "🔒 出于安全考虑，不会自动添加内网段到白名单"
+    echo "📖 请参考部署后的说明文档进行安全配置"
+    
+    # 仅添加必要的本地回环地址
+    if ! grep -q "127.0.0.0/8" /data/nginx/whitelist.txt 2>/dev/null; then
+        cat >> /data/nginx/whitelist.txt << EOF
+
+# === NAT环境基础配置 ===
+# 仅添加本地回环地址，其他IP请通过Web界面手动添加
+127.0.0.0/8
+::1
+EOF
+    fi
+    
+    echo "✅ NAT环境基础配置完成（仅本地回环）"
+    echo "🌐 请通过Web界面添加具体的客户端IP地址"
+fi
+
 # 启动API服务
 echo "启动Flask API..."
 mkdir -p /var/log/api /var/log/mtproxy
@@ -79,6 +102,37 @@ sleep 5
 # 启动Nginx
 echo "启动Nginx..."
 nginx -t && nginx
+
+# 检查服务启动状态
+echo "检查服务启动状态..."
+sleep 5
+
+echo "API服务检查:"
+if kill -0 $API_PID 2>/dev/null; then
+    echo "✅ API服务运行正常 (PID: $API_PID)"
+else
+    echo "❌ API服务启动失败"
+fi
+
+echo "MTProxy服务检查:"
+if kill -0 $MTPROXY_PID 2>/dev/null; then
+    echo "✅ MTProxy服务运行正常 (PID: $MTPROXY_PID)"
+    echo "MTProxy监听端口: 444"
+    netstat -tlnp 2>/dev/null | grep ":444 " || echo "⚠️  警告：端口444未在监听"
+else
+    echo "❌ MTProxy服务启动失败"
+    echo "MTProxy日志："
+    tail -10 /var/log/mtproxy/stderr.log 2>/dev/null || echo "无法读取错误日志"
+fi
+
+echo "Nginx服务检查:"
+if pgrep nginx >/dev/null; then
+    echo "✅ Nginx服务运行正常"
+    echo "Nginx监听端口:"
+    netstat -tlnp 2>/dev/null | grep nginx | head -5
+else
+    echo "❌ Nginx服务未运行"
+fi
 
 echo "✅ 所有服务启动完成"
 

@@ -482,11 +482,15 @@ class ConnectionMonitor:
                 
                 for line in f:
                     try:
-                        # 解析nginx stream log格式
-                        # IP [时间] 协议 状态 发送字节 接收字节 会话时间 whitelist:0/1
+                        # 解析nginx stream log格式，支持多种IP格式
+                        # 标准格式: IP [时间] 协议 状态 发送字节 接收字节 会话时间 whitelist:0/1 upstream:地址
+                        # PROXY protocol格式: proxy_protocol_addr [时间] ...
+                        line_content = line.strip()
+                        
+                        # 匹配标准或PROXY protocol格式
                         match = re.match(
-                            r'(\d+\.\d+\.\d+\.\d+|\[?[0-9a-fA-F:]+\]?) \[([^\]]+)\] (\w+) (\d+) (\d+) (\d+) ([\d.]+) whitelist:([01])',
-                            line.strip()
+                            r'([0-9a-fA-F.:]+|\d+\.\d+\.\d+\.\d+|\[?[0-9a-fA-F:]+\]?|proxy_protocol_addr) \[([^\]]+)\] (\w+) (\d+) (\d+) (\d+) ([\d.]+) whitelist:([01])(?:\s+upstream:([^\s]+))?',
+                            line_content
                         )
                         
                         if match:
@@ -720,12 +724,25 @@ class ConnectionMonitor:
     def update_connections(self):
         """更新连接数据（定期调用）"""
         try:
+            # 检查日志文件状态
+            if not self.log_path.exists():
+                logger.warning(f"Nginx log file not found: {self.log_path}")
+                return
+            
+            file_size = self.log_path.stat().st_size
+            logger.debug(f"Nginx log file size: {file_size}, last position: {self.last_position}")
+            
             connections = self.parse_nginx_logs()
             if connections:
                 self.record_connections(connections)
-                logger.debug(f"Recorded {len(connections)} new connections")
+                logger.info(f"Recorded {len(connections)} new connections")
+            else:
+                logger.debug("No new connections found in nginx logs")
+                
         except Exception as e:
             logger.error(f"Error updating connections: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
 
 class AuthManager:
     """认证管理类"""
@@ -1090,16 +1107,28 @@ def get_recent_connections():
         limit = min(int(request.args.get('limit', 100)), 500)
         connections = connection_monitor.get_recent_connections(limit)
         
+        # 调试信息：返回日志解析状态
+        debug_info = {
+            'log_file_exists': connection_monitor.log_path.exists(),
+            'log_file_size': connection_monitor.log_path.stat().st_size if connection_monitor.log_path.exists() else 0,
+            'last_position': connection_monitor.last_position
+        }
+        
         return jsonify({
             'success': True,
-            'data': connections
+            'data': connections,
+            'debug': debug_info,
+            'total_connections': len(connections)
         })
         
     except Exception as e:
         logger.error(f"Error getting recent connections: {e}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         return jsonify({
             'success': False,
-            'message': 'Failed to get recent connections'
+            'message': 'Failed to get recent connections',
+            'error': str(e)
         }), 500
 
 @app.route('/api/connections/blocked', methods=['GET'])
@@ -1164,6 +1193,87 @@ def clear_connection_logs():
         return jsonify({
             'success': False,
             'message': 'Failed to clear connection logs'
+        }), 500
+
+@app.route('/api/connections/test-parse', methods=['GET'])
+@require_auth  
+def test_log_parsing():
+    """测试日志解析功能（调试用）"""
+    try:
+        # 获取nginx日志文件的最后几行进行测试
+        if not connection_monitor.log_path.exists():
+            return jsonify({
+                'success': False,
+                'message': 'Nginx log file not found',
+                'log_path': str(connection_monitor.log_path)
+            })
+        
+        # 读取最后20行日志进行解析测试
+        import subprocess
+        result = subprocess.run(['tail', '-20', str(connection_monitor.log_path)], 
+                              capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to read nginx log file'
+            })
+        
+        lines = result.stdout.strip().split('\n')
+        parsed_lines = []
+        
+        for line in lines:
+            if not line.strip():
+                continue
+                
+            # 使用相同的解析逻辑
+            try:
+                match = re.match(
+                    r'([0-9a-fA-F.:]+|\d+\.\d+\.\d+\.\d+|\[?[0-9a-fA-F:]+\]?|proxy_protocol_addr) \[([^\]]+)\] (\w+) (\d+) (\d+) (\d+) ([\d.]+) whitelist:([01])(?:\s+upstream:([^\s]+))?',
+                    line.strip()
+                )
+                
+                if match:
+                    parsed_lines.append({
+                        'raw_line': line,
+                        'parsed': True,
+                        'ip': match.group(1),
+                        'timestamp': match.group(2),
+                        'protocol': match.group(3),
+                        'status': match.group(4),
+                        'whitelist_status': match.group(8)
+                    })
+                else:
+                    parsed_lines.append({
+                        'raw_line': line,
+                        'parsed': False,
+                        'reason': 'Regex pattern did not match'
+                    })
+                    
+            except Exception as parse_error:
+                parsed_lines.append({
+                    'raw_line': line,
+                    'parsed': False,
+                    'reason': str(parse_error)
+                })
+        
+        return jsonify({
+            'success': True,
+            'log_path': str(connection_monitor.log_path),
+            'file_exists': True,
+            'file_size': connection_monitor.log_path.stat().st_size,
+            'last_position': connection_monitor.last_position,
+            'total_lines_tested': len(lines),
+            'parsed_successfully': len([l for l in parsed_lines if l.get('parsed')]),
+            'sample_lines': parsed_lines
+        })
+        
+    except Exception as e:
+        logger.error(f"Error testing log parsing: {e}")
+        return jsonify({
+            'success': False,
+            'message': 'Failed to test log parsing',
+            'error': str(e)
         }), 500
 
 @app.errorhandler(404)

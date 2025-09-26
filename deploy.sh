@@ -172,9 +172,15 @@ install_docker_compose() {
 configure_system() {
     print_info "配置系统参数..."
     
-    # 优化内核参数
-    print_info "优化内核参数..."
-    cat >> /etc/sysctl.conf << 'EOF'
+    # 优化内核参数 - 检查是否已存在配置
+    print_info "检查并优化内核参数..."
+    
+    # 检查是否已经有MTProxy优化配置
+    if grep -q "# MTProxy 优化参数" /etc/sysctl.conf 2>/dev/null; then
+        print_info "MTProxy内核优化参数已存在，跳过配置"
+    else
+        print_info "添加MTProxy内核优化参数..."
+        cat >> /etc/sysctl.conf << 'EOF'
 
 # MTProxy 优化参数
 net.core.default_qdisc = fq
@@ -188,8 +194,13 @@ net.ipv4.tcp_tw_reuse = 1
 net.ipv4.tcp_fin_timeout = 10
 net.ipv4.tcp_slow_start_after_idle = 0
 EOF
+        print_success "内核优化参数已添加"
+    fi
     
-    sysctl -p
+    # 应用系统参数
+    sysctl -p >/dev/null 2>&1 || {
+        print_warning "部分内核参数应用失败，可能需要更高版本内核支持"
+    }
     
     print_success "系统参数配置完成"
 }
@@ -658,15 +669,27 @@ show_deployment_result() {
     echo "  tg://proxy?server=$public_ip&port=$MTPROXY_PORT&secret=$client_secret"
     echo
     
-    echo -e "${YELLOW}⚠️  完整白名单验证架构重要提醒${NC}"
-    echo "1. 完整流程: 客户端 → 外部端口$MTPROXY_PORT → nginx白名单验证(443) → MTProxy(444)"
-    echo "2. 🔒 白名单验证: 只有白名单中的IP才能连接MTProxy服务"
-    echo "3. 📝 默认白名单: 仅包含127.0.0.1和::1 (本地访问)"
-    echo "4. 🌐 添加IP: 通过Web管理界面(端口$WEB_PORT)添加您的IP到白名单"
-    echo "5. ⚡ 实时生效: API管理白名单，无需重启服务即可生效"
-    echo "6. 🔐 安全设计: 内部端口444、8081不直接暴露"
-    echo "7. 🔑 修改密码: 建议修改默认管理员密码"
-    echo "8. 🛠️ 故障排查: 如无法访问Web界面，运行: bash diagnose.sh"
+    echo -e "${YELLOW}⚠️  重要配置提醒${NC}"
+    echo "1. 🔒 白名单验证: 只有白名单中的IP才能连接MTProxy服务"
+    echo "2. 📝 默认白名单: 仅包含127.0.0.1和::1 (本地访问)"
+    echo "3. 🌐 添加IP: 通过Web管理界面(端口$WEB_PORT)添加客户端IP到白名单"
+    echo "4. ⚡ 实时生效: API管理白名单，无需重启服务即可生效"
+    echo ""
+    if [[ "$NAT_MODE" == "true" ]]; then
+        echo -e "${GREEN}🎉 NAT环境PROXY Protocol已自动配置:${NC}"
+        echo "• HAProxy前端代理已启动"
+        echo "• nginx已配置PROXY protocol支持"
+        echo "• 客户端连接: $public_ip:$MTPROXY_PORT"
+        echo "• 架构: 客户端 → HAProxy → nginx → MTProxy"
+        echo ""
+        echo -e "${BLUE}🔧 NAT环境管理命令:${NC}"
+        echo "• 查看HAProxy状态: docker logs mtproxy-haproxy"
+        echo "• 重启HAProxy: ./start-haproxy.sh"
+        echo "• 验证真实IP: docker-compose exec mtproxy-whitelist tail -f /var/log/nginx/stream_access.log"
+    else
+        echo -e "${BLUE}🔧 NAT环境真实IP获取:${NC}"
+        echo "如果遇到内网IP被拒绝的问题(如172.16.5.6 whitelist:0)，请重新部署并选择NAT模式"
+    fi
     echo
     
     echo -e "${BLUE}🔧 常用命令${NC}"
@@ -681,6 +704,156 @@ show_deployment_result() {
     echo
     
     print_line
+}
+
+# 根据网络模式配置nginx监听端口
+configure_nginx_for_network_mode() {
+    print_info "根据网络模式配置nginx..."
+    
+    # 等待容器启动
+    sleep 5
+    
+    if [[ "$NAT_MODE" == "true" ]]; then
+        print_info "NAT模式：配置nginx监听外部端口"
+        # NAT/host模式：nginx直接监听外部端口
+        docker-compose exec -T mtproxy-whitelist sh -c "
+            # 更新stream端口
+            sed -i 's/listen 443;/listen $MTPROXY_PORT;/' /etc/nginx/nginx.conf
+            # 更新web端口
+            sed -i 's/listen 8888;/listen $WEB_PORT;/' /etc/nginx/nginx.conf
+            nginx -t && nginx -s reload
+        " 2>/dev/null || {
+            print_warning "nginx配置更新失败，使用默认配置"
+        }
+    else
+        print_info "Bridge模式：nginx使用内部端口，Docker负责端口映射"
+        print_info "  MTProxy: 内部443 → 外部$MTPROXY_PORT"
+        print_info "  Web管理: 内部8888 → 外部$WEB_PORT"
+        # Bridge模式：保持默认配置，通过Docker端口映射
+    fi
+    
+    print_success "nginx网络模式配置完成"
+}
+
+# 配置PROXY Protocol支持（NAT环境自动启用）
+setup_proxy_protocol() {
+    print_info "NAT环境检测：配置PROXY Protocol支持..."
+    
+    # 等待容器完全启动
+    sleep 10
+    
+    print_info "备份nginx配置..."
+    docker-compose exec -T mtproxy-whitelist sh -c "
+        if [ ! -f /etc/nginx/nginx.conf.backup ]; then
+            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
+        fi
+    " 2>/dev/null || true
+    
+    print_info "更新nginx配置支持PROXY protocol..."
+    docker-compose exec -T mtproxy-whitelist sh -c "
+        # 更新stream server配置
+        sed -i '/listen 443;/c\\        listen 443 proxy_protocol;' /etc/nginx/nginx.conf
+        sed -i '/listen \${MTPROXY_PORT};/c\\        listen \${MTPROXY_PORT} proxy_protocol;' /etc/nginx/nginx.conf
+        
+        # 更新日志格式使用proxy_protocol_addr
+        sed -i 's/\$remote_addr/\$proxy_protocol_addr/g' /etc/nginx/nginx.conf
+        
+        # 更新geo配置使用proxy_protocol_addr
+        sed -i 's/geo \$remote_addr/geo \$proxy_protocol_addr/g' /etc/nginx/nginx.conf
+    " 2>/dev/null
+    
+    # 测试配置
+    if docker-compose exec -T mtproxy-whitelist nginx -t 2>/dev/null; then
+        docker-compose exec -T mtproxy-whitelist nginx -s reload 2>/dev/null
+        print_success "PROXY Protocol配置完成"
+    else
+        print_error "nginx配置测试失败，恢复备份"
+        docker-compose exec -T mtproxy-whitelist sh -c "
+            cp /etc/nginx/nginx.conf.backup /etc/nginx/nginx.conf
+            nginx -s reload
+        " 2>/dev/null || true
+        return 1
+    fi
+    
+    # 创建HAProxy配置
+    print_info "生成HAProxy前端代理配置..."
+    cat > haproxy.cfg << EOF
+# MTProxy HAProxy前端代理配置
+# NAT环境下获取真实客户端IP
+
+global
+    daemon
+    log stdout local0 info
+    maxconn 4096
+
+defaults
+    mode tcp
+    log global
+    option tcplog
+    option dontlognull
+    retries 3
+    timeout connect 5s
+    timeout client 300s
+    timeout server 300s
+
+# MTProxy前端
+frontend mtproxy_frontend
+    bind *:$MTPROXY_PORT
+    default_backend mtproxy_backend
+
+# MTProxy后端 - PROXY protocol
+backend mtproxy_backend
+    server nginx 127.0.0.1:443 send-proxy-v2 check maxconn 1000
+EOF
+    
+    # 创建HAProxy启动脚本
+    cat > start-haproxy.sh << 'EOF'
+#!/bin/bash
+echo "🚀 启动HAProxy前端代理..."
+
+# 停止可能存在的HAProxy容器
+docker stop mtproxy-haproxy 2>/dev/null || true
+docker rm mtproxy-haproxy 2>/dev/null || true
+
+# 启动HAProxy容器
+docker run -d \
+    --name mtproxy-haproxy \
+    --network host \
+    -v "$(pwd)/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+    --restart unless-stopped \
+    haproxy:2.8
+
+echo "✅ HAProxy已启动"
+echo "📊 查看状态: docker logs mtproxy-haproxy"
+EOF
+    
+    chmod +x start-haproxy.sh
+    
+    print_info "启动HAProxy前端代理..."
+    ./start-haproxy.sh >/dev/null 2>&1 || {
+        print_warning "HAProxy自动启动失败，请手动运行: ./start-haproxy.sh"
+    }
+    
+    print_success "NAT环境PROXY Protocol配置完成"
+}
+
+# 根据网络模式配置nginx
+configure_nginx_for_network_mode() {
+    print_info "配置nginx网络模式..."
+    
+    if [[ "$NAT_MODE" == "true" ]]; then
+        print_info "NAT模式：配置nginx直接监听外部端口"
+        # NAT/host模式：直接监听用户配置的外部端口
+        sed -i "s/listen 443;/listen $MTPROXY_PORT;/" "$PROJECT_DIR/docker/nginx.conf.template"
+        print_success "nginx已配置为NAT模式，监听端口: $MTPROXY_PORT"
+    else
+        print_info "Bridge模式：配置nginx监听内部端口443"
+        # Bridge模式：监听内部端口443，由Docker映射到外部端口
+        sed -i "s/listen [0-9]\+;/listen 443;/" "$PROJECT_DIR/docker/nginx.conf.template"
+        print_success "nginx已配置为Bridge模式，内部端口443 -> 外部端口$MTPROXY_PORT"
+    fi
+    
+    print_debug "nginx stream监听配置已更新"
 }
 
 # 创建管理脚本
@@ -807,6 +980,14 @@ main() {
     
     # 部署服务
     deploy_service
+    
+    # 根据网络模式配置nginx
+    configure_nginx_for_network_mode
+    
+    # NAT环境自动配置PROXY Protocol
+    if [[ "$NAT_MODE" == "true" ]]; then
+        setup_proxy_protocol
+    fi
     
     # 创建管理脚本
     create_management_script
