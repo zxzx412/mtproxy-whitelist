@@ -10,7 +10,7 @@ services:
     
     # 端口映射 - 仅在bridge模式下使用
     ports:
-      - "${MTPROXY_PORT:-8765}:${MTPROXY_PORT:-8765}"   # 外部端口 -> nginx白名单验证端口
+      - "${MTPROXY_PORT:-8765}:443"                     # 外部端口 -> nginx白名单验证端口(内部443)
       - "${WEB_PORT:-8888}:${WEB_PORT:-8888}"           # 外部端口 -> nginx Web管理端口
     # 内部端口443(nginx白名单)、444(MTProxy)、8888(nginx web)不直接暴露
     

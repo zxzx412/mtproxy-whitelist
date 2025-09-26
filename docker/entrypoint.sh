@@ -57,7 +57,21 @@ cd /opt/mtproxy
 source mtp_config
 DOMAIN_HEX=$(printf "%s" "$domain" | hexdump -ve '1/1 "%02x"')
 CLIENT_SECRET="ee${secret}${DOMAIN_HEX}"
-./mtg run $CLIENT_SECRET -b 0.0.0.0:444 --multiplex-per-connection 500 -t 127.0.0.1:8081 -4 ${PUBLIC_IP}:${MTPROXY_PORT} > /var/log/mtproxy/stdout.log 2> /var/log/mtproxy/stderr.log &
+
+# 根据NAT模式选择正确的IP和端口配置
+if [ "${NAT_MODE:-false}" = "true" ]; then
+    # NAT模式：使用主机IP和主机网络，直接绑定用户配置的端口
+    ADVERTISED_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || hostname -I | cut -d' ' -f1)
+    ADVERTISED_PORT=${MTPROXY_PORT}
+    echo "NAT模式: 广告IP=${ADVERTISED_IP}, 端口=${ADVERTISED_PORT}"
+else
+    # 标准bridge模式：MTProxy绑定内部端口444，nginx转发外部端口到444
+    ADVERTISED_IP=${PUBLIC_IP}
+    ADVERTISED_PORT=${MTPROXY_PORT}
+    echo "Bridge模式: 广告IP=${ADVERTISED_IP}, 端口=${ADVERTISED_PORT}"
+fi
+
+./mtg run $CLIENT_SECRET -b 0.0.0.0:444 --multiplex-per-connection 500 -t 127.0.0.1:8081 -4 ${ADVERTISED_IP}:${ADVERTISED_PORT} > /var/log/mtproxy/stdout.log 2> /var/log/mtproxy/stderr.log &
 MTPROXY_PID=$!
 echo $MTPROXY_PID > /run/mtproxy.pid
 sleep 5

@@ -147,22 +147,30 @@ class DatabaseManager:
         logger.info("Database initialized successfully")
     
     def create_default_admin(self, cursor):
-        """创建默认管理员用户"""
+        """创建或更新默认管理员用户"""
         try:
+            # 从环境变量获取管理员密码
+            admin_password = os.environ.get('ADMIN_PASSWORD', 'admin123')
+            password_hash = hashlib.sha256(admin_password.encode()).hexdigest()
+            
             # 检查是否已存在管理员用户
             cursor.execute("SELECT COUNT(*) FROM users WHERE username = ?", ('admin',))
             if cursor.fetchone()[0] == 0:
-                # 从环境变量获取管理员密码
-                admin_password = os.environ.get('ADMIN_PASSWORD', 'admin123')
-                password_hash = hashlib.sha256(admin_password.encode()).hexdigest()
-                
+                # 创建新的管理员用户
                 cursor.execute(
                     "INSERT INTO users (username, password_hash) VALUES (?, ?)",
                     ('admin', password_hash)
                 )
                 logger.info(f"Default admin user created with password from environment variable")
+            else:
+                # 更新现有管理员用户密码（确保密码变更生效）
+                cursor.execute(
+                    "UPDATE users SET password_hash = ? WHERE username = ?",
+                    (password_hash, 'admin')
+                )
+                logger.info(f"Default admin user password updated from environment variable")
         except Exception as e:
-            logger.error(f"Error creating default admin: {e}")
+            logger.error(f"Error creating/updating default admin: {e}")
     
     def get_connection(self):
         """获取数据库连接"""
