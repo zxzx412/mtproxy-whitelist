@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mtproxy-whitelist:
     build:
@@ -8,24 +6,26 @@ services:
     container_name: mtproxy-whitelist
     restart: unless-stopped
     
-    # 端口映射 - 仅在bridge模式下使用
+    # 端口映射 - 仅在bridge模式下使用，NAT模式下会被忽略
     ports:
-      - "${MTPROXY_PORT:-8765}:443"                     # 外部端口 -> nginx白名单验证端口(内部443)
-      - "${WEB_PORT:-8888}:8888"                        # 外部端口 -> nginx Web管理端口(内部固定8888)
-    # 内部端口443(nginx白名单)、444(MTProxy)、8888(nginx web)不直接暴露
+      - "${MTPROXY_PORT:-14202}:${NGINX_STREAM_PORT:-14202}"  # 外部端口 -> nginx白名单验证端口
+      - "${WEB_PORT:-8989}:${NGINX_WEB_PORT:-8989}"           # 外部端口 -> nginx Web管理端口
+    # NAT模式下使用host网络，端口映射会被忽略
     
     # 环境变量配置
     environment:
       - MTPROXY_DOMAIN=${MTPROXY_DOMAIN:-azure.microsoft.com}
       - MTPROXY_TAG=${MTPROXY_TAG:-}
-      - SECRET_KEY=${SECRET_KEY}
+      - SECRET_KEY=${SECRET_KEY:-ee004d64da8e145b8daa35a2012e220e}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - MTPROXY_PORT=${MTPROXY_PORT:-8765}      # MTProxy代理端口，nginx监听此端口
+      - MTPROXY_PORT=${MTPROXY_PORT:-14202}     # MTProxy代理端口，nginx监听此端口
       - INTERNAL_MTPROXY_PORT=444               # MTProxy实际运行端口
-      - WEB_PORT=${WEB_PORT:-8888}              # Web管理端口变量化
+      - WEB_PORT=${WEB_PORT:-8989}              # Web管理端口变量化
       - API_PORT=8080                           # API内部端口
-      - NAT_MODE=${NAT_MODE:-false}             # NAT模式开关
+      - NAT_MODE=${NAT_MODE:-true}              # NAT模式开关
+      - NGINX_STREAM_PORT=${NGINX_STREAM_PORT:-14202}  # nginx stream 端口
+      - NGINX_WEB_PORT=${NGINX_WEB_PORT:-8989}         # nginx web 端口
     
     # 数据卷挂载
     volumes:

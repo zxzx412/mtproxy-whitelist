@@ -466,6 +466,10 @@ PRIVILEGED_MODE=${PRIVILEGED_MODE:-false}
 # 端口配置
 MTPROXY_PORT=$MTPROXY_PORT
 WEB_PORT=$WEB_PORT
+NGINX_STREAM_PORT=$MTPROXY_PORT
+NGINX_WEB_PORT=$WEB_PORT
+INTERNAL_MTPROXY_PORT=444
+API_PORT=8080
 
 # MTProxy 配置
 MTPROXY_DOMAIN=$FAKE_DOMAIN
@@ -515,7 +519,9 @@ deploy_service() {
             cp docker-compose.yml docker-compose.yml.backup
         fi
         # 移除端口映射配置（host网络模式不兼容）
-        sed '/# 端口映射 - 仅在bridge模式下使用/,/- "${WEB_PORT:-8888}:${WEB_PORT:-8888}"/d' docker-compose.yml.backup > docker-compose.yml
+        # 使用更精确的sed命令移除ports部分
+        sed '/^[[:space:]]*# 端口映射/,/^[[:space:]]*# NAT模式下使用host网络/d' docker-compose.yml.backup > docker-compose.yml.tmp
+        mv docker-compose.yml.tmp docker-compose.yml
         print_info "已移除端口映射配置，使用host网络直接绑定"
     fi
     
