@@ -710,15 +710,17 @@ show_deployment_result() {
     fi
     echo
     
-    echo -e "${BLUE}🔧 常用命令${NC}"
-    echo "查看服务状态: docker-compose ps"
-    echo "查看服务日志: docker-compose logs -f"
-    echo "重启服务: docker-compose restart"
-    echo "停止服务: docker-compose down"
-    echo "更新服务: docker-compose pull && docker-compose up -d"
-    echo "系统诊断: bash diagnose.sh (排查访问问题)"
-    echo "管理工具: mtproxy-whitelist status"
-    echo "重新构建: docker-compose build --no-cache && docker-compose up -d"
+    echo -e "${BLUE}🔧 统一管理命令 (./deploy.sh)${NC}"
+    echo "查看状态: ./deploy.sh status"
+    echo "查看日志: ./deploy.sh logs"
+    echo "重启服务: ./deploy.sh restart"
+    echo "停止服务: ./deploy.sh stop"
+    echo "系统诊断: ./deploy.sh diagnose"
+    echo "强制重建: ./deploy.sh rebuild"
+    echo "快速修复: ./deploy.sh fix"
+    echo "测试IP获取: ./deploy.sh test-ip"
+    echo "清理系统: ./deploy.sh clean"
+    echo "帮助信息: ./deploy.sh help"
     echo
     
     print_line
@@ -994,176 +996,254 @@ setup_proxy_protocol() {
 }
 
 
-# 创建管理脚本
+# 创建管理脚本（指向统一的deploy.sh）
 create_management_script() {
-    print_info "创建管理脚本..."
+    print_info "创建管理脚本链接..."
     
-    cat > /usr/local/bin/mtproxy-whitelist << EOF
-#!/bin/bash
-
-# MTProxy 白名单系统管理脚本 (自定义端口版)
-
-# 查找项目目录
-if [[ -f "/opt/mtproxy-whitelist/docker-compose.yml" ]]; then
-    PROJECT_DIR="/opt/mtproxy-whitelist"
-elif [[ -f "$PROJECT_DIR/docker-compose.yml" ]]; then
-    PROJECT_DIR="$PROJECT_DIR"
-else
-    echo "错误: 找不到 docker-compose.yml 文件"
-    echo "请在项目根目录运行此命令"
-    exit 1
-fi
-
-cd "\$PROJECT_DIR" || exit 1
-
-case "\$1" in
-    start)
-        echo "启动 MTProxy 白名单系统..."
-        docker-compose up -d
-        ;;
-    stop)
-        echo "停止 MTProxy 白名单系统..."
-        docker-compose down
-        ;;
-    restart)
-        echo "重启 MTProxy 白名单系统..."
-        docker-compose restart
-        ;;
-    status)
-        echo "MTProxy 白名单系统状态:"
-        docker-compose ps
-        echo ""
-        echo "端口监听状态:"
-        ss -tuln | grep -E "(:$MTPROXY_PORT |:$WEB_PORT )"
-        ;;
-    logs)
-        echo "查看 MTProxy 白名单系统日志:"
-        docker-compose logs -f --tail=100
-        ;;
-    update)
-        echo "更新 MTProxy 白名单系统..."
-        docker-compose pull
-        docker-compose up -d
-        ;;
-    info)
-        echo "MTProxy 白名单系统信息:"
-        PUBLIC_IP=\$(curl -s --connect-timeout 10 https://api.ip.sb/ip 2>/dev/null || echo "YOUR_SERVER_IP")
-        echo "Web 管理界面: http://\$PUBLIC_IP:$WEB_PORT"
-        echo "代理端口: $MTPROXY_PORT"
-        echo "管理端口: $WEB_PORT"
-        ;;
-    ports)
-        echo "端口配置信息:"
-        echo "MTProxy 代理端口: $MTPROXY_PORT"
-        echo "Web 管理端口: $WEB_PORT"
-        echo ""
-        echo "防火墙规则:"
-        echo "  sudo ufw allow $MTPROXY_PORT/tcp"
-        echo "  sudo ufw allow $WEB_PORT/tcp"
-        ;;
-    test-nat-ip)
-        echo "测试 NAT IP 获取功能..."
-        bash "\$PROJECT_DIR/deploy.sh" test-nat-ip
-        ;;
-    fix-nat-ip)
-        echo "修复 NAT IP 获取..."
-        bash "\$PROJECT_DIR/deploy.sh" fix-nat-ip
-        ;;
-    diagnose-ip)
-        echo "运行 IP 获取诊断..."
-        bash "\$PROJECT_DIR/deploy.sh" diagnose-ip
-        ;;
-    monitor-ips)
-        echo "实时监控客户端 IP..."
-        docker-compose exec mtproxy-whitelist /usr/local/bin/monitor-client-ips.sh 2>/dev/null || echo "监控脚本不可用"
-        ;;
-    ip-stats)
-        echo "客户端 IP 统计..."
-        docker-compose exec mtproxy-whitelist /usr/local/bin/ip-stats.sh 2>/dev/null || echo "统计脚本不可用"
-        ;;
-    *)
-        echo "用法: \$0 {start|stop|restart|status|logs|update|info|ports|test-nat-ip|fix-nat-ip|diagnose-ip|monitor-ips|ip-stats}"
-        echo ""
-        echo "基础命令:"
-        echo "  start   - 启动服务"
-        echo "  stop    - 停止服务"
-        echo "  restart - 重启服务"
-        echo "  status  - 查看状态"
-        echo "  logs    - 查看日志"
-        echo "  update  - 更新服务"
-        echo "  info    - 显示访问信息"
-        echo "  ports   - 显示端口配置"
-        echo ""
-        echo "NAT IP 获取增强:"
-        echo "  test-nat-ip  - 测试 NAT IP 获取功能"
-        echo "  fix-nat-ip   - 修复 NAT IP 获取问题"
-        echo "  diagnose-ip  - 运行 IP 获取诊断"
-        echo "  monitor-ips  - 实时监控客户端 IP"
-        echo "  ip-stats     - 查看客户端 IP 统计"
-        exit 1
-        ;;
-esac
-EOF
+    # 创建符号链接到deploy.sh
+    if [[ -f "$PROJECT_DIR/deploy.sh" ]]; then
+        ln -sf "$PROJECT_DIR/deploy.sh" /usr/local/bin/mtproxy-whitelist 2>/dev/null || {
+            print_warning "无法创建全局链接，请使用 ./deploy.sh 命令"
+        }
+        print_success "管理脚本已链接: mtproxy-whitelist -> deploy.sh"
+    fi
     
-    chmod +x /usr/local/bin/mtproxy-whitelist
+    print_info "📋 统一管理命令说明:"
+    echo "  ./deploy.sh          - 完整部署"
+    echo "  ./deploy.sh start    - 启动服务"
+    echo "  ./deploy.sh stop     - 停止服务"
+    echo "  ./deploy.sh restart  - 重启服务"
+    echo "  ./deploy.sh status   - 查看状态"
+    echo "  ./deploy.sh logs     - 查看日志"
+    echo "  ./deploy.sh diagnose - 系统诊断"
+    echo "  ./deploy.sh rebuild  - 强制重建"
+    echo "  ./deploy.sh fix      - 快速修复"
+    echo "  ./deploy.sh test-ip  - 测试IP获取"
+    echo "  ./deploy.sh clean    - 清理系统"
+}
+
+# 强制重建功能
+force_rebuild() {
+    print_info "🔧 强制重建 MTProxy 白名单系统..."
     
-    print_success "管理脚本创建完成: mtproxy-whitelist"
+    print_info "1. 停止并清理所有容器..."
+    docker-compose down -v --remove-orphans 2>/dev/null || true
+    
+    print_info "2. 清理Docker缓存..."
+    docker system prune -f
+    docker builder prune -f 2>/dev/null || true
+    
+    print_info "3. 删除相关镜像..."
+    docker images | grep mtproxy | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
+    
+    print_info "4. 强制重建镜像（无缓存）..."
+    docker-compose build --no-cache --pull
+    
+    print_info "5. 启动服务..."
+    docker-compose up -d
+    
+    print_info "6. 等待服务启动..."
+    sleep 15
+    
+    print_info "7. 检查服务状态..."
+    check_service_status
+    
+    print_success "🎉 强制重建完成！"
+}
+
+# 诊断功能
+diagnose_system() {
+    print_info "🔍 系统诊断报告"
+    print_line
+    
+    print_info "1. Docker 环境检查"
+    docker --version
+    docker-compose --version
+    echo ""
+    
+    print_info "2. 容器状态检查"
+    docker-compose ps
+    echo ""
+    
+    print_info "3. 端口监听检查"
+    if [[ -f ".env" ]]; then
+        source .env
+        print_info "配置的端口: MTProxy=$MTPROXY_PORT, Web=$WEB_PORT"
+        ss -tuln | grep -E ":$MTPROXY_PORT |:$WEB_PORT " || print_warning "配置端口未监听"
+    fi
+    ss -tuln | grep -E ":443 |:444 |:8888 |:8080 " || print_warning "内部端口未监听"
+    echo ""
+    
+    print_info "4. 服务日志检查"
+    if docker-compose ps | grep -q "Up"; then
+        print_info "最近的容器日志:"
+        docker-compose logs --tail=20
+    else
+        print_warning "容器未运行"
+    fi
+    echo ""
+    
+    print_info "5. 网络连通性检查"
+    if [[ -f ".env" ]]; then
+        source .env
+        local public_ip=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "localhost")
+        print_info "公网IP: $public_ip"
+        print_info "测试Web界面连通性..."
+        local http_code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${WEB_PORT:-8888} 2>/dev/null || echo "000")
+        if [[ "$http_code" =~ ^(200|401|403)$ ]]; then
+            print_success "Web界面连通正常 (HTTP $http_code)"
+        else
+            print_warning "Web界面连通异常 (HTTP $http_code)"
+        fi
+    fi
+    
+    print_line
+    print_success "诊断完成"
+}
+
+# 快速修复功能
+quick_fix() {
+    print_info "🔧 快速修复常见问题..."
+    
+    if [[ -f ".env" ]]; then
+        source .env
+    fi
+    
+    print_info "1. 检查并修复环境变量..."
+    if [[ -z "$MTPROXY_PORT" ]] || [[ -z "$WEB_PORT" ]]; then
+        print_warning "环境变量缺失，重新生成.env文件"
+        generate_config
+    fi
+    
+    print_info "2. 重启服务..."
+    docker-compose restart
+    
+    print_info "3. 等待服务启动..."
+    sleep 10
+    
+    print_info "4. 检查修复结果..."
+    check_service_status
+    
+    print_success "快速修复完成"
+}
+
+# IP获取测试功能
+test_ip_acquisition() {
+    print_info "🔍 测试IP获取功能..."
+    
+    if ! docker-compose ps | grep -q "Up"; then
+        print_error "服务未运行，请先启动服务"
+        return 1
+    fi
+    
+    print_info "1. 检查nginx配置..."
+    docker-compose exec -T mtproxy-whitelist nginx -t 2>/dev/null && print_success "nginx配置正常" || print_error "nginx配置异常"
+    
+    print_info "2. 检查白名单文件..."
+    if docker-compose exec -T mtproxy-whitelist test -f /data/nginx/whitelist.txt 2>/dev/null; then
+        print_success "白名单文件存在"
+        print_info "当前白名单内容:"
+        docker-compose exec -T mtproxy-whitelist head -10 /data/nginx/whitelist.txt 2>/dev/null || true
+    else
+        print_warning "白名单文件不存在"
+    fi
+    
+    print_info "3. 检查连接日志..."
+    if docker-compose exec -T mtproxy-whitelist test -f /var/log/nginx/stream_access.log 2>/dev/null; then
+        print_info "最近的连接记录:"
+        docker-compose exec -T mtproxy-whitelist tail -5 /var/log/nginx/stream_access.log 2>/dev/null || print_info "暂无连接记录"
+    else
+        print_info "连接日志文件不存在"
+    fi
+    
+    print_success "IP获取测试完成"
 }
 
 # 主安装流程
 main() {
     # 检查命令行参数
     case "${1:-}" in
-        "test-nat-ip")
-            print_info "测试 NAT IP 获取功能..."
+        "force-rebuild"|"rebuild")
+            print_info "强制重建模式..."
+            force_rebuild
+            exit 0
+            ;;
+        "diagnose"|"diag")
+            print_info "诊断模式..."
+            diagnose_system
+            exit 0
+            ;;
+        "quick-fix"|"fix")
+            print_info "快速修复模式..."
+            quick_fix
+            exit 0
+            ;;
+        "test-ip"|"test-nat-ip")
+            print_info "IP获取测试模式..."
+            test_ip_acquisition
+            exit 0
+            ;;
+        "logs")
+            print_info "查看日志..."
+            docker-compose logs -f --tail=50
+            exit 0
+            ;;
+        "status")
+            print_info "服务状态..."
+            docker-compose ps
             if [[ -f ".env" ]]; then
                 source .env
+                print_info "端口监听状态:"
+                ss -tuln | grep -E ":$MTPROXY_PORT |:$WEB_PORT " || print_warning "端口未监听"
             fi
-            test_nat_ip_function
             exit 0
             ;;
-        "fix-nat-ip")
-            print_info "修复 NAT IP 获取..."
-            if [[ -f ".env" ]]; then
-                source .env
-            fi
-            fix_nat_ip
+        "stop")
+            print_info "停止服务..."
+            docker-compose down
             exit 0
             ;;
-        "enable-proxy-protocol")
-            print_info "启用 PROXY Protocol..."
-            enable_proxy_protocol
+        "start")
+            print_info "启动服务..."
+            docker-compose up -d
             exit 0
             ;;
-        "diagnose-ip")
-            print_info "运行 IP 获取诊断..."
-            if docker-compose ps | grep -q "Up"; then
-                docker-compose exec mtproxy-whitelist /usr/local/bin/diagnose-ip.sh 2>/dev/null || {
-                    print_error "诊断脚本执行失败，请确保服务正在运行"
-                }
-            else
-                print_error "服务未运行，请先启动服务"
-            fi
+        "restart")
+            print_info "重启服务..."
+            docker-compose restart
+            exit 0
+            ;;
+        "clean")
+            print_info "清理系统..."
+            docker-compose down -v --remove-orphans
+            docker system prune -f
+            print_success "清理完成"
             exit 0
             ;;
         "help"|"-h"|"--help")
-            echo "MTProxy 白名单系统部署脚本"
+            echo "MTProxy 白名单系统统一管理脚本"
             echo ""
-            echo "用法: $0 [选项]"
+            echo "用法: $0 [命令]"
             echo ""
-            echo "选项:"
-            echo "  (无参数)              - 完整部署流程"
-            echo "  test-nat-ip          - 测试 NAT IP 获取功能"
-            echo "  fix-nat-ip           - 修复 NAT IP 获取问题"
-            echo "  enable-proxy-protocol - 启用 PROXY Protocol"
-            echo "  diagnose-ip          - 运行 IP 获取诊断"
-            echo "  help, -h, --help     - 显示此帮助信息"
+            echo "部署命令:"
+            echo "  (无参数)     - 完整部署流程"
+            echo "  force-rebuild - 强制重建（清理缓存）"
+            echo "  quick-fix    - 快速修复常见问题"
             echo ""
-            echo "NAT 环境增强功能:"
-            echo "  • PROXY Protocol 支持"
-            echo "  • 多层 IP 获取回退机制"
-            echo "  • 智能白名单管理"
-            echo "  • 实时监控和诊断"
+            echo "管理命令:"
+            echo "  start        - 启动服务"
+            echo "  stop         - 停止服务"
+            echo "  restart      - 重启服务"
+            echo "  status       - 查看状态"
+            echo "  logs         - 查看日志"
+            echo ""
+            echo "诊断命令:"
+            echo "  diagnose     - 系统诊断"
+            echo "  test-ip      - 测试IP获取"
+            echo ""
+            echo "维护命令:"
+            echo "  clean        - 清理系统"
+            echo "  help         - 显示帮助"
             echo ""
             exit 0
             ;;

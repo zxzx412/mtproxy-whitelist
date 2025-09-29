@@ -33,7 +33,6 @@ COPY web/ /usr/share/nginx/html/
 COPY api/ /opt/mtproxy-api/
 COPY docker/nginx.conf.template /etc/nginx/nginx.conf.template
 COPY docker/entrypoint.sh /entrypoint.sh
-COPY docker/.env /.env
 
 # 创建目录结构
 RUN mkdir -p /data/{nginx,webapp,logs,backup} \

@@ -22,17 +22,10 @@ fi
 # 初始化nginx配置
 mkdir -p /etc/nginx/conf.d /data/nginx
 
-# 强制加载 .env 文件（解决 docker-compose 环境变量传递问题）
-if [ -f "/.env" ]; then
-    echo "🔧 加载 .env 文件..."
-    set -a  # 自动导出变量
-    source /.env
-    set +a
-elif [ -f "/app/.env" ]; then
-    echo "🔧 加载 /app/.env 文件..."
-    set -a
-    source /app/.env
-    set +a
+# 强制加载环境变量（解决 docker-compose 传递问题）
+echo "🔧 检查环境变量..."
+if [ -z "$MTPROXY_PORT" ] || [ -z "$WEB_PORT" ]; then
+    echo "⚠️  环境变量未设置，使用默认值"
 fi
 
 # 设置默认端口值（防止环境变量未设置）
@@ -90,11 +83,7 @@ echo "检测NAT环境配置..."
 if [ "${NAT_MODE:-false}" = "true" ]; then
     echo "🔍 检测到NAT模式，启用IP获取增强功能"
     
-    # 运行NAT白名单修复脚本
-    if [ -f "/usr/local/bin/fix-nat-whitelist.sh" ]; then
-        echo "🔧 运行NAT白名单修复..."
-        /usr/local/bin/fix-nat-whitelist.sh fix
-    fi
+    echo "🔧 配置NAT环境白名单..."
     
     # NAT模式下的IP获取优化（内置实现）
     echo "🔧 配置NAT环境IP获取优化..."
