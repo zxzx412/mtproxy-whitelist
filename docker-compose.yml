@@ -6,11 +6,11 @@ services:
     container_name: mtproxy-whitelist
     restart: unless-stopped
     
-    # 端口映射 - 仅在bridge模式下使用，NAT模式下会被忽略
+    # 端口映射 - 仅在bridge模式下使用
+    # NAT模式下使用host网络时，此配置会被docker-compose忽略
     ports:
-      - "${MTPROXY_PORT:-14202}:${NGINX_STREAM_PORT:-14202}"  # 外部端口 -> nginx白名单验证端口
-      - "${WEB_PORT:-8989}:${NGINX_WEB_PORT:-8989}"           # 外部端口 -> nginx Web管理端口
-    # NAT模式下使用host网络，端口映射会被忽略
+      - "${MTPROXY_PORT:-14202}:443"   # bridge模式：外部端口 -> nginx内部443端口
+      - "${WEB_PORT:-8989}:8888"       # bridge模式：外部端口 -> nginx内部8888端口
     
     # 环境变量配置
     environment:
@@ -36,9 +36,9 @@ services:
     # 网络配置 - 支持NAT模式动态切换
     network_mode: "${NETWORK_MODE:-bridge}"
     
-    # 健康检查 (使用变量端口)
+    # 健康检查 (使用固定内部端口)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${NGINX_WEB_PORT:-8989}/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
       interval: 30s
       timeout: 10s
       retries: 3

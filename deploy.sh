@@ -1036,16 +1036,26 @@ force_rebuild() {
     print_info "3. 删除相关镜像..."
     docker images | grep mtproxy | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
     
-    print_info "4. 强制重建镜像（无缓存）..."
+    print_info "4. 检查NAT模式配置..."
+    if [[ -f ".env" ]]; then
+        source .env
+        if [[ "$NAT_MODE" == "true" ]]; then
+            print_info "NAT模式：将使用host网络，nginx直接监听端口 $MTPROXY_PORT 和 $WEB_PORT"
+        else
+            print_info "Bridge模式：将使用端口映射 $MTPROXY_PORT->443 和 $WEB_PORT->8888"
+        fi
+    fi
+    
+    print_info "5. 强制重建镜像（无缓存）..."
     docker-compose build --no-cache --pull
     
-    print_info "5. 启动服务..."
+    print_info "6. 启动服务..."
     docker-compose up -d
     
-    print_info "6. 等待服务启动..."
+    print_info "7. 等待服务启动..."
     sleep 15
     
-    print_info "7. 检查服务状态..."
+    print_info "8. 检查服务状态..."
     check_service_status
     
     print_success "🎉 强制重建完成！"

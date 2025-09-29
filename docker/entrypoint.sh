@@ -49,15 +49,15 @@ echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_POR
 
 # 根据NAT模式配置nginx监听端口
 if [ "${NAT_MODE:-false}" = "true" ]; then
-    echo "🔧 NAT模式：配置nginx直接监听外部端口${MTPROXY_PORT}"
-    # 简化架构：nginx直接监听用户配置的外部端口
+    echo "🔧 NAT模式：nginx直接监听外部端口 ${MTPROXY_PORT}(stream) 和 ${WEB_PORT}(web)"
+    # NAT模式：nginx直接监听用户配置的外部端口
     export NGINX_STREAM_PORT=${MTPROXY_PORT}
     export NGINX_WEB_PORT=${WEB_PORT}
 else
-    echo "🔧 Bridge模式：配置nginx监听内部端口443"
-    # Bridge模式下，nginx监听443，Docker映射外部端口到443
+    echo "🔧 Bridge模式：nginx监听内部端口 443(stream) 和 8888(web)"
+    # Bridge模式：nginx监听固定内部端口，Docker负责端口映射
     export NGINX_STREAM_PORT=443
-    export NGINX_WEB_PORT=${WEB_PORT}
+    export NGINX_WEB_PORT=8888
 fi
 
 # 替换环境变量并生成最终配置
@@ -145,7 +145,7 @@ if [ "${NAT_MODE:-false}" = "true" ]; then
     # NAT模式：使用主机IP和主机网络，直接绑定用户配置的端口
     ADVERTISED_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || hostname -I | cut -d' ' -f1)
     ADVERTISED_PORT=${MTPROXY_PORT}
-    echo "NAT模式: 广告IP=${ADVERTISED_IP}, 端口=${ADVERTISED_PORT}"
+    echo "NAT模式: 广告IP=${ADVERTISED_IP}, 广告端口=${ADVERTISED_PORT} (客户端连接端口)"
 else
     # 标准bridge模式：MTProxy绑定内部端口444，nginx转发外部端口到444
     ADVERTISED_IP=${PUBLIC_IP}
