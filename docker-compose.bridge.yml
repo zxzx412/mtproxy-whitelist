@@ -6,7 +6,8 @@ services:
     container_name: mtproxy-whitelist
     restart: unless-stopped
     
-    # 端口映射 - Bridge模式专用
+    # Bridge模式：使用bridge网络 + 端口映射
+    network_mode: bridge
     ports:
       - "${MTPROXY_PORT:-14202}:443"   # 外部端口 -> nginx内部443端口
       - "${WEB_PORT:-8989}:8888"       # 外部端口 -> nginx内部8888端口
@@ -18,13 +19,14 @@ services:
       - SECRET_KEY=${SECRET_KEY:-ee004d64da8e145b8daa35a2012e220e}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - MTPROXY_PORT=${MTPROXY_PORT:-14202}     # MTProxy代理端口，nginx监听此端口
+      - MTPROXY_PORT=${MTPROXY_PORT:-14202}     # 用于日志和配置
       - INTERNAL_MTPROXY_PORT=444               # MTProxy实际运行端口
-      - WEB_PORT=${WEB_PORT:-8989}              # Web管理端口变量化
+      - WEB_PORT=${WEB_PORT:-8989}              # 用于日志和配置
       - API_PORT=8080                           # API内部端口
-      - NAT_MODE=false                          # Bridge模式固定为false
-      - NGINX_STREAM_PORT=${NGINX_STREAM_PORT:-14202}  # nginx stream 端口
-      - NGINX_WEB_PORT=${NGINX_WEB_PORT:-8989}         # nginx web 端口
+      - NAT_MODE=false                          # Bridge模式
+      - NETWORK_MODE=bridge                     # Bridge网络
+      - NGINX_STREAM_PORT=443                   # nginx固定监听443
+      - NGINX_WEB_PORT=8888                     # nginx固定监听8888
     
     # 数据卷挂载
     volumes:
@@ -32,13 +34,9 @@ services:
       - mtproxy_logs:/var/log
       - mtproxy_config:/opt/mtproxy
     
-    # 网络配置 - Bridge模式固定使用bridge网络
-    # NAT模式请使用 docker-compose.nat.yml 文件
-    network_mode: bridge
-    
-    # 健康检查 - Bridge模式使用固定内部端口
+    # Bridge模式健康检查 - 使用固定内部端口
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:8888/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -69,14 +67,11 @@ services:
         max-size: "10m"
         max-file: "3"
     
-    # 添加标签用于识别
+    # Bridge模式标签
     labels:
-      - "traefik.enable=false"
-      - "com.mtproxy.whitelist=true"
-      - "com.mtproxy.version=4.0"
-      - "com.mtproxy.whitelist.mapping=fixed"
-      - "com.mtproxy.api.sync=enabled"
-      - "com.mtproxy.reload.script=integrated"
+      - "com.mtproxy.mode=bridge"
+      - "com.mtproxy.network=bridge"
+      - "com.mtproxy.ports.mapping=${MTPROXY_PORT:-14202}:443,${WEB_PORT:-8989}:8888"
 
 # 数据卷定义
 volumes:

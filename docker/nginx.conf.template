@@ -42,32 +42,65 @@ stream {
     # 真实IP获取配置 - 支持多种IP获取方式
     # 支持PROXY Protocol、X-Forwarded-For等机制
     
-    # 日志格式 - NAT环境增强版，显示多种IP信息
-    log_format proxy_enhanced '$remote_addr|proxy:$proxy_protocol_addr|server:$server_addr [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed upstream:$upstream_addr';
-    log_format proxy_debug '$remote_addr|proxy:$proxy_protocol_addr|realip:$realip_remote_addr [$time_local] $protocol $status whitelist:$allowed connection:$connection';
-    log_format proxy_simple '$remote_addr [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed upstream:$upstream_addr';
+    # 日志格式 - NAT环境IP获取调试版
+    log_format proxy_enhanced '$remote_addr|proxy:$proxy_protocol_addr|final:$client_ip|public:$is_valid_public_ip|warn:$ip_warning [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed upstream:$upstream_addr';
+    log_format proxy_debug '$remote_addr|proxy:$proxy_protocol_addr|final:$client_ip|public:$is_valid_public_ip [$time_local] $protocol $status whitelist:$allowed connection:$connection';
+    log_format proxy_simple '$remote_addr|final:$client_ip|warn:$ip_warning [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed upstream:$upstream_addr';
     
     access_log /var/log/nginx/stream_access.log proxy_enhanced;
     error_log /var/log/nginx/stream_error.log info;
 
-    # 真实IP获取策略 - 多层回退机制
-    # 优先使用PROXY Protocol获取的IP，回退到remote_addr
-    map $proxy_protocol_addr $detected_real_ip {
-        default $remote_addr;
-        ~^.+$ $proxy_protocol_addr;
+    # NAT环境IP获取策略
+    # 在NAT环境下，我们需要特殊处理IP获取
+    # 如果remote_addr是内网IP，说明客户端通过NAT访问，需要特殊处理
+    
+    # 检测是否为内网IP
+    map $remote_addr $is_private_ip {
+        default 0;
+        ~^127\.                    1;   # 127.x.x.x (localhost)
+        ~^10\.                     1;   # 10.x.x.x (Class A private)
+        ~^172\.(1[6-9]|2[0-9]|3[01])\. 1;  # 172.16-31.x.x (Class B private)
+        ~^192\.168\.               1;   # 192.168.x.x (Class C private)
     }
     
-    # 进一步处理内网IP，避免将Docker网关IP作为客户端IP
-    map $detected_real_ip $final_client_ip {
-        default $detected_real_ip;
-        # 如果检测到的是Docker内网IP，使用原始remote_addr
-        ~^172\.(1[6-9]|2[0-9]|3[01])\. $remote_addr;
-        ~^10\. $remote_addr;
-        ~^192\.168\. $remote_addr;
+    # 如果是内网IP，尝试从PROXY Protocol获取真实IP
+    map $is_private_ip $should_use_proxy_protocol {
+        0 0;  # 公网IP，直接使用remote_addr
+        1 1;  # 内网IP，尝试使用proxy_protocol_addr
+    }
+    
+    # 最终IP选择策略
+    map $should_use_proxy_protocol $final_client_ip {
+        0 $remote_addr;                                    # 直接使用remote_addr
+        1 $proxy_protocol_addr;                           # 使用PROXY Protocol IP
+    }
+    
+    # 如果PROXY Protocol为空，回退到remote_addr
+    map $final_client_ip $client_ip {
+        default $final_client_ip;
+        "" $remote_addr;
+        "-" $remote_addr;
+    }
+    
+    # 检测是否为有效的公网IP (排除内网IP)
+    map $client_ip $is_valid_public_ip {
+        default 1;
+        ~^127\.                    0;   # localhost
+        ~^10\.                     0;   # Class A private
+        ~^172\.(1[6-9]|2[0-9]|3[01])\. 0;  # Class B private  
+        ~^192\.168\.               0;   # Class C private
+        ~^169\.254\.               0;   # Link-local
+        ~^224\.                    0;   # Multicast
+    }
+    
+    # 如果检测到内网IP，记录警告但仍进行白名单验证
+    map $is_valid_public_ip $ip_warning {
+        1 "";
+        0 "WARNING_PRIVATE_IP";
     }
 
-    # 白名单映射 - 使用最终确定的客户端IP进行匹配
-    geo $final_client_ip $allowed {
+    # 白名单映射 - 使用处理后的客户端IP
+    geo $client_ip $allowed {
         default 0;
         include /data/nginx/whitelist_map.conf;
     }
@@ -88,17 +121,18 @@ stream {
         server 127.0.0.1:9999; # 不存在的端口，自动拒绝连接
     }
 
-    # 主要白名单验证服务器 - NAT模式优化
+    # 主要白名单验证服务器 - 支持PROXY Protocol
     server {
-        # NAT模式下使用标准监听，不启用proxy_protocol（避免兼容性问题）
+        # 同时监听标准端口和PROXY Protocol端口
         listen 0.0.0.0:${NGINX_STREAM_PORT};
+        listen 0.0.0.0:${NGINX_STREAM_PORT}1 proxy_protocol;  # 额外的PROXY Protocol端口
         proxy_pass $backend_pool;
         proxy_timeout 10s;
         proxy_connect_timeout 3s;
         proxy_responses 1;
         
-        # 详细的访问日志
-        access_log /var/log/nginx/whitelist_access.log proxy_simple;
+        # 详细的访问日志 - 显示IP获取过程
+        access_log /var/log/nginx/whitelist_access.log proxy_enhanced;
     }
     
     # 诊断服务器 - 用于测试IP获取（仅监听本地）

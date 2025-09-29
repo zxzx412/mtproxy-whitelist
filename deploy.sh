@@ -506,6 +506,11 @@ EOF
 generate_nat_compose() {
     print_info "生成NAT模式专用配置..."
     
+    # 确保环境变量已加载
+    if [[ -f ".env" ]]; then
+        source .env
+    fi
+    
     cat > docker-compose.nat.yml << EOF
 services:
   mtproxy-whitelist:
@@ -515,7 +520,7 @@ services:
     container_name: mtproxy-whitelist
     restart: unless-stopped
     
-    # NAT模式：使用host网络，无需端口映射
+    # NAT模式：使用host网络，完全移除端口映射配置
     network_mode: host
     
     # 环境变量配置
@@ -540,9 +545,9 @@ services:
       - mtproxy_logs:/var/log
       - mtproxy_config:/opt/mtproxy
     
-    # 健康检查
+    # NAT模式健康检查 - 使用动态端口
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:\${WEB_PORT:-8989}/health"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:\${WEB_PORT:-8989}/health || curl -f http://localhost:8888/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -572,6 +577,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    
+    # NAT模式标签
+    labels:
+      - "com.mtproxy.mode=nat"
+      - "com.mtproxy.network=host"
+      - "com.mtproxy.ports=\${MTPROXY_PORT:-14202},\${WEB_PORT:-8989}"
 
 # 数据卷定义
 volumes:
@@ -584,6 +595,10 @@ volumes:
 EOF
     
     print_success "NAT模式配置文件已生成: docker-compose.nat.yml"
+    print_info "NAT模式特点："
+    print_info "  ✅ 使用host网络，无端口映射冲突"
+    print_info "  ✅ nginx直接监听主机端口 ${MTPROXY_PORT:-14202} 和 ${WEB_PORT:-8989}"
+    print_info "  ✅ 健康检查支持动态端口"
 }
 
 # 部署服务
@@ -599,6 +614,17 @@ deploy_service() {
         print_info "NAT模式：使用专用配置文件..."
         generate_nat_compose
         
+        print_info "检查NAT模式端口冲突..."
+        # 检查端口是否被占用
+        if ss -tuln | grep -q ":$MTPROXY_PORT "; then
+            print_warning "端口 $MTPROXY_PORT 已被占用，NAT模式可能冲突"
+            ss -tuln | grep ":$MTPROXY_PORT "
+        fi
+        if ss -tuln | grep -q ":$WEB_PORT "; then
+            print_warning "端口 $WEB_PORT 已被占用，NAT模式可能冲突"
+            ss -tuln | grep ":$WEB_PORT "
+        fi
+        
         print_info "使用NAT模式配置构建镜像..."
         docker-compose -f docker-compose.nat.yml build --no-cache
         
@@ -613,13 +639,65 @@ deploy_service() {
         print_info "✅ NAT模式部署完成"
         print_info "📋 NAT模式管理命令："
         print_info "   ./docker-compose-nat.sh ps     # 查看状态"
-        print_info "   ./docker-compose-nat.sh logs   # 查看日志"
+        print_info "   ./docker-compose-nat.sh logs   # 查看日志"  
         print_info "   ./docker-compose-nat.sh restart # 重启服务"
+        
+        # NAT模式特殊检查
+        print_info "🔍 NAT模式部署验证..."
+        sleep 5
+        
+        # 检查容器是否使用host网络
+        CONTAINER_NETWORK=$(docker inspect mtproxy-whitelist --format='{{.HostConfig.NetworkMode}}' 2>/dev/null || echo "未运行")
+        if [[ "$CONTAINER_NETWORK" == "host" ]]; then
+            print_success "✅ 容器正确使用host网络模式"
+        else
+            print_error "❌ 容器网络模式异常: $CONTAINER_NETWORK"
+        fi
+        
+        # 检查端口监听
+        print_info "检查NAT模式端口监听..."
+        sleep 3
+        if ss -tuln | grep -q ":$MTPROXY_PORT "; then
+            print_success "✅ MTProxy端口 $MTPROXY_PORT 监听正常"
+        else
+            print_warning "⚠️  MTProxy端口 $MTPROXY_PORT 未监听"
+        fi
+        
+        if ss -tuln | grep -q ":$WEB_PORT "; then
+            print_success "✅ Web管理端口 $WEB_PORT 监听正常"
+        else
+            print_warning "⚠️  Web管理端口 $WEB_PORT 未监听"
+        fi
+        
     else
-        print_info "Bridge模式：使用标准配置文件..."
-        docker-compose build --no-cache
-        docker-compose up -d
+        print_info "Bridge模式：使用专用配置文件..."
+        
+        # 生成Bridge模式配置（如果不存在）
+        if [[ ! -f "docker-compose.bridge.yml" ]]; then
+            print_info "生成Bridge模式配置文件..."
+            # docker-compose.bridge.yml 已经通过write_to_file创建
+        fi
+        
+        print_info "检查Bridge模式端口映射..."
+        print_info "  外部端口 $MTPROXY_PORT → 内部端口 443"
+        print_info "  外部端口 $WEB_PORT → 内部端口 8888"
+        
+        print_info "使用Bridge模式配置构建镜像..."
+        docker-compose -f docker-compose.bridge.yml build --no-cache
+        
+        print_info "启动Bridge模式服务..."
+        docker-compose -f docker-compose.bridge.yml up -d
+        
+        # 创建管理别名
+        echo "#!/bin/bash" > docker-compose-bridge.sh
+        echo "docker-compose -f docker-compose.bridge.yml \"\$@\"" >> docker-compose-bridge.sh
+        chmod +x docker-compose-bridge.sh
+        
         print_info "✅ Bridge模式部署完成"
+        print_info "📋 Bridge模式管理命令："
+        print_info "   ./docker-compose-bridge.sh ps     # 查看状态"
+        print_info "   ./docker-compose-bridge.sh logs   # 查看日志"
+        print_info "   ./docker-compose-bridge.sh restart # 重启服务"
     fi
     
     # 等待服务启动
@@ -1122,10 +1200,10 @@ get_compose_cmd() {
         if [[ "$NAT_MODE" == "true" ]]; then
             echo "docker-compose -f docker-compose.nat.yml"
         else
-            echo "docker-compose"
+            echo "docker-compose -f docker-compose.bridge.yml"
         fi
     else
-        echo "docker-compose"
+        echo "docker-compose -f docker-compose.bridge.yml"
     fi
 }
 
@@ -1333,6 +1411,16 @@ main() {
             test_ip_acquisition
             exit 0
             ;;
+        "fix-nat-ip")
+            print_info "NAT环境真实IP获取修复..."
+            fix_nat_ip
+            exit 0
+            ;;
+        "setup-haproxy")
+            print_info "配置HAProxy PROXY Protocol..."
+            setup_haproxy_proxy_protocol
+            exit 0
+            ;;
         "logs")
             print_info "查看日志..."
             local compose_cmd=$(get_compose_cmd)
@@ -1372,9 +1460,15 @@ main() {
             print_info "清理系统..."
             local compose_cmd=$(get_compose_cmd)
             $compose_cmd down -v --remove-orphans
-            docker-compose down -v --remove-orphans 2>/dev/null || true  # 清理可能存在的标准配置
+            
+            # 清理所有可能的配置文件
+            docker-compose down -v --remove-orphans 2>/dev/null || true
+            docker-compose -f docker-compose.nat.yml down -v --remove-orphans 2>/dev/null || true
+            docker-compose -f docker-compose.bridge.yml down -v --remove-orphans 2>/dev/null || true
+            
             docker system prune -f
             rm -f docker-compose.nat.yml docker-compose-nat.sh 2>/dev/null || true
+            rm -f docker-compose.bridge.yml docker-compose-bridge.sh 2>/dev/null || true
             print_success "清理完成"
             exit 0
             ;;
@@ -1398,6 +1492,8 @@ main() {
             echo "诊断命令:"
             echo "  diagnose     - 系统诊断"
             echo "  test-ip      - 测试IP获取"
+            echo "  fix-nat-ip   - 修复NAT环境真实IP获取"
+            echo "  setup-haproxy - 配置HAProxy PROXY Protocol"
             echo ""
             echo "维护命令:"
             echo "  clean        - 清理系统"
@@ -1473,6 +1569,274 @@ main() {
 
 # 错误处理
 trap 'print_error "部署过程中发生错误，请检查日志"; exit 1' ERR
+
+# NAT环境真实IP获取修复
+fix_nat_ip() {
+    echo "🔧 修复NAT环境真实IP获取问题..."
+    echo "⚠️  注意：不能简单地将NAT网关IP加入白名单，这会放行所有流量！"
+    echo ""
+    
+    # 检查当前问题
+    if docker exec mtproxy-whitelist test -f /var/log/nginx/stream_access.log 2>/dev/null; then
+        echo "📊 分析当前访问情况..."
+        
+        # 提取最近访问的IP
+        RECENT_IPS=$(docker exec mtproxy-whitelist tail -20 /var/log/nginx/stream_access.log | grep -oE "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | sort | uniq)
+        
+        echo "检测到的访问IP:"
+        echo "$RECENT_IPS"
+        
+        # 检查是否有内网IP
+        PRIVATE_IPS=$(echo "$RECENT_IPS" | grep -E "^(172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|10\.)")
+        
+        if [ -n "$PRIVATE_IPS" ]; then
+            echo ""
+            echo "❌ 问题确认：检测到NAT网关内网IP"
+            echo "内网IP: $PRIVATE_IPS"
+            echo ""
+            echo "🔍 NAT环境下获取真实IP的解决方案："
+            echo ""
+            echo "方案1: HTTP代理模式 (推荐)"
+            echo "  - 改用HTTP CONNECT代理"
+            echo "  - 支持X-Forwarded-For头获取真实IP"
+            echo "  - 兼容性好，支持大多数客户端"
+            echo ""
+            echo "方案2: 配置上游PROXY Protocol"
+            echo "  - 需要在NAT网关配置PROXY Protocol"
+            echo "  - 技术要求高，需要网络管理员配置"
+            echo ""
+            echo "方案3: 修改网络架构"
+            echo "  - 使用透明代理或直连模式"
+            echo "  - 绕过NAT网关的IP转换"
+            echo ""
+            
+            echo "选择解决方案:"
+            echo "1. 切换到HTTP代理模式 (推荐)"
+            echo "2. 生成PROXY Protocol配置指南"
+            echo "3. 显示网络架构建议"
+            echo "4. 取消"
+            echo ""
+            read -p "请选择 [1-4]: " solution_choice
+            
+            case $solution_choice in
+                1)
+                    echo "🔄 切换到HTTP代理模式..."
+                    setup_http_proxy_mode
+                    ;;
+                2)
+                    echo "📋 生成PROXY Protocol配置指南..."
+                    generate_proxy_protocol_guide
+                    ;;
+                3)
+                    echo "🏗️  显示网络架构建议..."
+                    show_network_architecture_advice
+                    ;;
+                *)
+                    echo "取消操作"
+                    ;;
+            esac
+        else
+            echo "✅ 未检测到内网IP问题，当前IP获取正常"
+        fi
+    else
+        echo "❌ 无法访问nginx日志，请检查容器状态"
+    fi
+}
+
+# 设置HTTP代理模式
+setup_http_proxy_mode() {
+    echo "🔄 配置HTTP代理模式..."
+    
+    # 备份当前nginx配置
+    docker exec mtproxy-whitelist cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
+    
+    # 生成HTTP代理配置
+    cat > http-proxy-nginx.conf << 'EOF'
+# HTTP代理模式nginx配置
+# 支持获取真实客户端IP
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # 真实IP获取配置
+    set_real_ip_from 172.16.0.0/12;
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 192.168.0.0/16;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+    
+    # 日志格式
+    log_format proxy_format '$remote_addr - $remote_user [$time_local] "$request" '
+                           '$status $body_bytes_sent "$http_referer" '
+                           '"$http_user_agent" "$http_x_forwarded_for" '
+                           'realip:$realip_remote_addr';
+    
+    # 白名单映射
+    geo $realip_remote_addr $allowed {
+        default 0;
+        include /data/nginx/whitelist_map.conf;
+    }
+    
+    # HTTP CONNECT代理服务器
+    server {
+        listen ${WEB_PORT:-8989};
+        server_name _;
+        
+        # Web管理界面
+        location / {
+            proxy_pass http://127.0.0.1:8888;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+    
+    # CONNECT代理服务器
+    server {
+        listen ${MTPROXY_PORT:-14202};
+        
+        # 白名单验证
+        if ($allowed = 0) {
+            return 403;
+        }
+        
+        # CONNECT方法处理
+        location / {
+            proxy_connect;
+            proxy_connect_allow 443 444;
+            proxy_connect_connect_timeout 10s;
+            proxy_connect_read_timeout 10s;
+            proxy_connect_send_timeout 10s;
+            
+            access_log /var/log/nginx/connect_access.log proxy_format;
+        }
+    }
+}
+EOF
+    
+    echo "⚠️  HTTP代理模式需要nginx-connect模块支持"
+    echo "当前容器可能不支持，建议使用专门的HTTP代理解决方案"
+    echo ""
+    echo "推荐替代方案："
+    echo "1. 使用HAProxy作为前端代理"
+    echo "2. 配置Cloudflare等CDN服务"
+    echo "3. 使用专门的SOCKS5代理"
+}
+
+# 生成PROXY Protocol配置指南
+generate_proxy_protocol_guide() {
+    echo "📋 PROXY Protocol配置指南"
+    echo "=========================="
+    echo ""
+    echo "PROXY Protocol可以在NAT环境下传递真实客户端IP"
+    echo ""
+    echo "1. 上游代理配置 (HAProxy示例):"
+    echo "   frontend mtproxy_frontend"
+    echo "       bind *:443"
+    echo "       default_backend mtproxy_backend"
+    echo ""
+    echo "   backend mtproxy_backend"
+    echo "       server mtproxy1 127.0.0.1:14202 send-proxy"
+    echo ""
+    echo "2. nginx配置已支持PROXY Protocol:"
+    echo "   listen 14202 proxy_protocol;"
+    echo "   set_real_ip_from 172.16.0.0/12;"
+    echo ""
+    echo "3. 测试PROXY Protocol:"
+    echo "   echo -e 'PROXY TCP4 1.2.3.4 5.6.7.8 1234 443\\r\\n' | nc localhost 14202"
+    echo ""
+    echo "4. 验证配置:"
+    echo "   检查nginx日志中是否显示真实IP而非NAT网关IP"
+}
+
+# 显示网络架构建议
+show_network_architecture_advice() {
+    echo "🏗️  NAT环境网络架构建议"
+    echo "======================="
+    echo ""
+    echo "当前问题：NAT网关隐藏了真实客户端IP"
+    echo ""
+    echo "解决方案架构："
+    echo ""
+    echo "方案A: 前端代理架构"
+    echo "客户端 → 公网 → HAProxy/Nginx(PROXY Protocol) → MTProxy容器"
+    echo "优点：保留真实IP，安全性高"
+    echo "缺点：需要配置前端代理"
+    echo ""
+    echo "方案B: CDN架构"
+    echo "客户端 → Cloudflare → 源站(获取CF-Connecting-IP) → MTProxy"
+    echo "优点：自动获取真实IP，抗DDoS"
+    echo "缺点：依赖第三方服务"
+    echo ""
+    echo "方案C: 直连架构"
+    echo "客户端 → 公网IP → 直接连接MTProxy(无NAT)"
+    echo "优点：最简单，性能最好"
+    echo "缺点：需要公网IP，安全性依赖防火墙"
+    echo ""
+    echo "推荐：根据你的网络环境选择方案A或C"
+}
+
+# 配置HAProxy PROXY Protocol
+setup_haproxy_proxy_protocol() {
+    echo "🔧 配置HAProxy PROXY Protocol支持..."
+    
+    if [[ ! -f "docker/haproxy-proxy-protocol.cfg" ]]; then
+        print_error "HAProxy配置文件不存在"
+        return 1
+    fi
+    
+    echo "📋 HAProxy PROXY Protocol部署步骤："
+    echo ""
+    echo "1. 安装HAProxy (如果未安装):"
+    echo "   # Ubuntu/Debian"
+    echo "   sudo apt update && sudo apt install haproxy"
+    echo "   # CentOS/RHEL"  
+    echo "   sudo yum install haproxy"
+    echo ""
+    echo "2. 复制配置文件:"
+    echo "   sudo cp docker/haproxy-proxy-protocol.cfg /etc/haproxy/haproxy.cfg"
+    echo ""
+    echo "3. 启动HAProxy:"
+    echo "   sudo systemctl enable haproxy"
+    echo "   sudo systemctl start haproxy"
+    echo ""
+    echo "4. 验证配置:"
+    echo "   sudo systemctl status haproxy"
+    echo "   sudo haproxy -c -f /etc/haproxy/haproxy.cfg"
+    echo ""
+    echo "5. 网络架构:"
+    echo "   客户端 → HAProxy(443) → MTProxy容器(14202) + PROXY Protocol"
+    echo ""
+    echo "6. 检查nginx日志确认真实IP:"
+    echo "   docker exec mtproxy-whitelist tail -f /var/log/nginx/stream_access.log"
+    echo ""
+    
+    read -p "是否现在复制HAProxy配置文件到系统? (y/N): " copy_config
+    if [[ $copy_config =~ ^[Yy]$ ]]; then
+        if [[ -f "/etc/haproxy/haproxy.cfg" ]]; then
+            sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.backup
+            echo "✅ 已备份原配置文件"
+        fi
+        
+        sudo cp docker/haproxy-proxy-protocol.cfg /etc/haproxy/haproxy.cfg
+        echo "✅ HAProxy配置文件已复制"
+        
+        # 验证配置
+        if sudo haproxy -c -f /etc/haproxy/haproxy.cfg; then
+            echo "✅ HAProxy配置验证通过"
+            
+            read -p "是否现在重启HAProxy服务? (y/N): " restart_haproxy
+            if [[ $restart_haproxy =~ ^[Yy]$ ]]; then
+                sudo systemctl restart haproxy
+                sudo systemctl status haproxy
+            fi
+        else
+            echo "❌ HAProxy配置验证失败"
+        fi
+    fi
+}
 
 # 执行主流程
 main "$@"
