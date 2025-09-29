@@ -68,19 +68,25 @@ if [ "${NAT_MODE:-false}" = "true" ]; then
         /usr/local/bin/fix-nat-whitelist.sh fix
     fi
     
-    # 启用PROXY Protocol支持
-    if [ "${ENABLE_PROXY_PROTOCOL:-true}" = "true" ]; then
-        echo "🔧 启用PROXY Protocol支持..."
-        if [ -f "/usr/local/bin/enable-proxy-protocol.sh" ]; then
-            /usr/local/bin/enable-proxy-protocol.sh enable
-        fi
-    fi
+    # NAT模式下的IP获取优化（内置实现）
+    echo "🔧 配置NAT环境IP获取优化..."
     
-    # 运行容器内IP获取增强
-    if [ -f "/usr/local/bin/enhance-ip-detection.sh" ]; then
-        echo "🔧 启用IP检测增强..."
-        /usr/local/bin/enhance-ip-detection.sh
-    fi
+    # 添加常见的内网IP段到白名单映射，避免误判
+    cat >> /data/nginx/whitelist.txt << 'EOF'
+
+# === NAT环境IP获取优化 ===
+# 本地回环
+127.0.0.0/8
+::1/128
+
+# 常见内网段（根据实际需要调整）
+# 10.0.0.0/8
+# 172.16.0.0/12  
+# 192.168.0.0/16
+EOF
+    
+    # 重新生成白名单映射
+    /usr/local/bin/generate-whitelist-map.sh generate
     
     echo "✅ NAT环境IP获取功能配置完成"
     echo "🌐 支持PROXY Protocol和真实IP获取"

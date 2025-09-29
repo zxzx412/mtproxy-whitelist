@@ -81,7 +81,6 @@ stream {
     # MTProxy后端服务器组
     upstream mtproxy_backend {
         server 127.0.0.1:444 max_fails=3 fail_timeout=30s;
-        keepalive 32;  # 启用连接复用
     }
 
     # 拒绝后端服务器组 - 返回连接拒绝
@@ -89,37 +88,28 @@ stream {
         server 127.0.0.1:9999; # 不存在的端口，自动拒绝连接
     }
 
-    # 主要白名单验证服务器 - 支持PROXY Protocol
+    # 主要白名单验证服务器 - NAT模式优化
     server {
-        # 根据NAT_MODE和ENABLE_PROXY_PROTOCOL环境变量决定是否启用proxy_protocol
-        listen 0.0.0.0:${NGINX_STREAM_PORT} proxy_protocol;
+        # NAT模式下使用标准监听，不启用proxy_protocol（避免兼容性问题）
+        listen 0.0.0.0:${NGINX_STREAM_PORT};
         proxy_pass $backend_pool;
         proxy_timeout 10s;
         proxy_connect_timeout 3s;
         proxy_responses 1;
-        
-        # 启用连接复用和优化
-        proxy_socket_keepalive on;
         
         # 详细的访问日志
-        access_log /var/log/nginx/whitelist_access.log proxy_enhanced;
-    }
-    
-    # 备用服务器 - 不使用PROXY Protocol（兼容性和调试）
-    server {
-        listen 0.0.0.0:$((${NGINX_STREAM_PORT} + 1));
-        proxy_pass $backend_pool;
-        proxy_timeout 10s;
-        proxy_connect_timeout 3s;
-        proxy_responses 1;
-        
-        # 使用简单日志格式
-        access_log /var/log/nginx/whitelist_fallback.log proxy_simple;
+        access_log /var/log/nginx/whitelist_access.log proxy_simple;
     }
     
     # 诊断服务器 - 用于测试IP获取（仅监听本地）
     server {
         listen 127.0.0.1:9998;
-        return "Client IP: $final_client_ip, Remote: $remote_addr, Proxy: $proxy_protocol_addr";
+        proxy_pass 127.0.0.1:444;
+        proxy_timeout 1s;
+        proxy_connect_timeout 1s;
+        proxy_responses 1;
+        
+        # 诊断日志
+        access_log /var/log/nginx/diagnostic.log proxy_simple;
     }
 }

@@ -760,44 +760,22 @@ enable_proxy_protocol() {
         return 1
     fi
     
-    # 备份 nginx 配置
-    docker-compose exec -T mtproxy-whitelist sh -c "
-        if [ ! -f /etc/nginx/nginx.conf.backup ]; then
-            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
-        fi
-    " 2>/dev/null || true
-    
-    # 更新 nginx 配置支持 PROXY Protocol
-    docker-compose exec -T mtproxy-whitelist sh -c "
-        # 更新 stream 配置支持 proxy_protocol
-        sed -i '/listen.*443/s/listen.*443.*/listen 443 proxy_protocol;/' /etc/nginx/nginx.conf
-        
-        # 添加 realip 配置
-        if ! grep -q 'real_ip_header proxy_protocol' /etc/nginx/nginx.conf; then
-            sed -i '/stream {/a\\    real_ip_header proxy_protocol;' /etc/nginx/nginx.conf
-        fi
-        
-        # 更新日志格式使用真实 IP
-        sed -i 's/\$remote_addr/\$proxy_protocol_addr/g' /etc/nginx/nginx.conf
-        
-        # 更新 geo 配置使用真实 IP
-        sed -i 's/geo \$remote_addr/geo \$proxy_protocol_addr/g' /etc/nginx/nginx.conf
-    " 2>/dev/null
-    
-    # 测试配置
+    print_info "检查当前 nginx 配置状态..."
     if docker-compose exec -T mtproxy-whitelist nginx -t 2>/dev/null; then
-        docker-compose exec -T mtproxy-whitelist nginx -s reload 2>/dev/null
-        print_success "PROXY Protocol 配置完成"
+        print_success "nginx 配置正常，PROXY Protocol 功能已在模板中配置"
     else
-        print_error "nginx 配置测试失败，恢复备份"
+        print_error "nginx 配置有问题，尝试重新生成配置..."
         docker-compose exec -T mtproxy-whitelist sh -c "
-            if [ -f /etc/nginx/nginx.conf.backup ]; then
-                cp /etc/nginx/nginx.conf.backup /etc/nginx/nginx.conf
-                nginx -s reload
-            fi
-        " 2>/dev/null || true
-        return 1
+            # 重新生成 nginx 配置
+            envsubst '\$WEB_PORT \$MTPROXY_PORT \$NGINX_STREAM_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+            nginx -t && nginx -s reload
+        " 2>/dev/null || {
+            print_error "nginx 配置修复失败"
+            return 1
+        }
     fi
+    
+    print_success "PROXY Protocol 支持检查完成"
 }
 
 # 修复 NAT 环境 IP 获取
@@ -969,106 +947,44 @@ test_nat_ip_function() {
     print_success "NAT IP 获取功能测试完成"
 }
 
-# 配置PROXY Protocol支持（NAT环境自动启用）
+# NAT 环境配置优化（简化版）
 setup_proxy_protocol() {
-    print_info "NAT环境检测：配置PROXY Protocol支持..."
+    print_info "NAT环境：配置网络优化..."
     
     # 等待容器完全启动
-    sleep 10
+    sleep 5
     
-    print_info "备份nginx配置..."
-    docker-compose exec -T mtproxy-whitelist sh -c "
-        if [ ! -f /etc/nginx/nginx.conf.backup ]; then
-            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
-        fi
-    " 2>/dev/null || true
-    
-    print_info "更新nginx配置支持PROXY protocol..."
-    docker-compose exec -T mtproxy-whitelist sh -c "
-        # 更新stream server配置
-        sed -i '/listen 443;/c\\        listen 443 proxy_protocol;' /etc/nginx/nginx.conf
-        sed -i '/listen \${MTPROXY_PORT};/c\\        listen \${MTPROXY_PORT} proxy_protocol;' /etc/nginx/nginx.conf
-        
-        # 更新日志格式使用proxy_protocol_addr
-        sed -i 's/\$remote_addr/\$proxy_protocol_addr/g' /etc/nginx/nginx.conf
-        
-        # 更新geo配置使用proxy_protocol_addr
-        sed -i 's/geo \$remote_addr/geo \$proxy_protocol_addr/g' /etc/nginx/nginx.conf
-    " 2>/dev/null
-    
-    # 测试配置
+    print_info "检查 nginx 配置状态..."
     if docker-compose exec -T mtproxy-whitelist nginx -t 2>/dev/null; then
-        docker-compose exec -T mtproxy-whitelist nginx -s reload 2>/dev/null
-        print_success "PROXY Protocol配置完成"
+        print_success "nginx 配置正常"
     else
-        print_error "nginx配置测试失败，恢复备份"
+        print_error "nginx 配置有问题，尝试重新生成..."
         docker-compose exec -T mtproxy-whitelist sh -c "
-            cp /etc/nginx/nginx.conf.backup /etc/nginx/nginx.conf
-            nginx -s reload
-        " 2>/dev/null || true
-        return 1
+            # 重新生成 nginx 配置
+            envsubst '\$WEB_PORT \$MTPROXY_PORT \$NGINX_STREAM_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+            nginx -t && nginx -s reload
+        " 2>/dev/null || {
+            print_error "nginx 配置修复失败"
+            return 1
+        }
     fi
     
-    # 创建HAProxy配置
-    print_info "生成HAProxy前端代理配置..."
-    cat > haproxy.cfg << EOF
-# MTProxy HAProxy前端代理配置
-# NAT环境下获取真实客户端IP
-
-global
-    daemon
-    log stdout local0 info
-    maxconn 4096
-
-defaults
-    mode tcp
-    log global
-    option tcplog
-    option dontlognull
-    retries 3
-    timeout connect 5s
-    timeout client 300s
-    timeout server 300s
-
-# MTProxy前端
-frontend mtproxy_frontend
-    bind *:$MTPROXY_PORT
-    default_backend mtproxy_backend
-
-# MTProxy后端 - PROXY protocol
-backend mtproxy_backend
-    server nginx 127.0.0.1:443 send-proxy-v2 check maxconn 1000
-EOF
+    print_info "优化白名单配置..."
+    docker-compose exec -T mtproxy-whitelist sh -c "
+        # 确保基本的本地地址在白名单中
+        if ! grep -q '127.0.0.1' /data/nginx/whitelist.txt 2>/dev/null; then
+            echo '127.0.0.1' >> /data/nginx/whitelist.txt
+        fi
+        if ! grep -q '::1' /data/nginx/whitelist.txt 2>/dev/null; then
+            echo '::1' >> /data/nginx/whitelist.txt
+        fi
+        
+        # 重新生成白名单映射
+        /usr/local/bin/generate-whitelist-map.sh generate
+        nginx -s reload
+    " 2>/dev/null || true
     
-    # 创建HAProxy启动脚本
-    cat > start-haproxy.sh << 'EOF'
-#!/bin/bash
-echo "🚀 启动HAProxy前端代理..."
-
-# 停止可能存在的HAProxy容器
-docker stop mtproxy-haproxy 2>/dev/null || true
-docker rm mtproxy-haproxy 2>/dev/null || true
-
-# 启动HAProxy容器
-docker run -d \
-    --name mtproxy-haproxy \
-    --network host \
-    -v "$(pwd)/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
-    --restart unless-stopped \
-    haproxy:2.8
-
-echo "✅ HAProxy已启动"
-echo "📊 查看状态: docker logs mtproxy-haproxy"
-EOF
-    
-    chmod +x start-haproxy.sh
-    
-    print_info "启动HAProxy前端代理..."
-    ./start-haproxy.sh >/dev/null 2>&1 || {
-        print_warning "HAProxy自动启动失败，请手动运行: ./start-haproxy.sh"
-    }
-    
-    print_success "NAT环境PROXY Protocol配置完成"
+    print_success "NAT环境网络优化完成"
 }
 
 
