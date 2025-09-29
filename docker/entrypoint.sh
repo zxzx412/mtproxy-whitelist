@@ -22,11 +22,35 @@ fi
 # 初始化nginx配置
 mkdir -p /etc/nginx/conf.d /data/nginx
 
+# 强制加载 .env 文件（解决 docker-compose 环境变量传递问题）
+if [ -f "/.env" ]; then
+    echo "🔧 加载 .env 文件..."
+    set -a  # 自动导出变量
+    source /.env
+    set +a
+elif [ -f "/app/.env" ]; then
+    echo "🔧 加载 /app/.env 文件..."
+    set -a
+    source /app/.env
+    set +a
+fi
+
 # 设置默认端口值（防止环境变量未设置）
-export WEB_PORT=${WEB_PORT:-8888}
-export MTPROXY_PORT=${MTPROXY_PORT:-8765}
-export NGINX_WEB_PORT=${WEB_PORT}
-export NGINX_STREAM_PORT=${MTPROXY_PORT}
+export WEB_PORT=${WEB_PORT:-8989}
+export MTPROXY_PORT=${MTPROXY_PORT:-14202}
+export NGINX_WEB_PORT=${NGINX_WEB_PORT:-${WEB_PORT}}
+export NGINX_STREAM_PORT=${NGINX_STREAM_PORT:-${MTPROXY_PORT}}
+export NAT_MODE=${NAT_MODE:-true}
+export NETWORK_MODE=${NETWORK_MODE:-host}
+
+# 调试：显示关键环境变量
+echo "🔍 环境变量检查："
+echo "   NAT_MODE=$NAT_MODE"
+echo "   NETWORK_MODE=$NETWORK_MODE"
+echo "   MTPROXY_PORT=$MTPROXY_PORT"
+echo "   WEB_PORT=$WEB_PORT"
+echo "   NGINX_STREAM_PORT=$NGINX_STREAM_PORT"
+echo "   NGINX_WEB_PORT=$NGINX_WEB_PORT"
 
 echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_PORT}"
 
