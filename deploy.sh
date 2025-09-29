@@ -502,6 +502,90 @@ EOF
     print_success "配置文件生成完成"
 }
 
+# 生成NAT模式专用的docker-compose配置
+generate_nat_compose() {
+    print_info "生成NAT模式专用配置..."
+    
+    cat > docker-compose.nat.yml << EOF
+services:
+  mtproxy-whitelist:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: mtproxy-whitelist
+    restart: unless-stopped
+    
+    # NAT模式：使用host网络，无需端口映射
+    network_mode: host
+    
+    # 环境变量配置
+    environment:
+      - MTPROXY_DOMAIN=\${MTPROXY_DOMAIN:-azure.microsoft.com}
+      - MTPROXY_TAG=\${MTPROXY_TAG:-}
+      - SECRET_KEY=\${SECRET_KEY:-ee004d64da8e145b8daa35a2012e220e}
+      - JWT_EXPIRATION_HOURS=\${JWT_EXPIRATION_HOURS:-24}
+      - ADMIN_PASSWORD=\${ADMIN_PASSWORD:-admin123}
+      - MTPROXY_PORT=\${MTPROXY_PORT:-14202}
+      - INTERNAL_MTPROXY_PORT=444
+      - WEB_PORT=\${WEB_PORT:-8989}
+      - API_PORT=8080
+      - NAT_MODE=true
+      - NETWORK_MODE=host
+      - NGINX_STREAM_PORT=\${MTPROXY_PORT:-14202}
+      - NGINX_WEB_PORT=\${WEB_PORT:-8989}
+    
+    # 数据卷挂载
+    volumes:
+      - mtproxy_data:/data
+      - mtproxy_logs:/var/log
+      - mtproxy_config:/opt/mtproxy
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:\${WEB_PORT:-8989}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    
+    # 安全配置
+    security_opt:
+      - no-new-privileges:true
+    
+    # 临时文件系统挂载
+    tmpfs:
+      - /tmp:size=100M,noexec,nosuid,nodev
+      - /var/run:size=100M,noexec,nosuid,nodev
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 数据卷定义
+volumes:
+  mtproxy_data:
+    driver: local
+  mtproxy_logs:
+    driver: local  
+  mtproxy_config:
+    driver: local
+EOF
+    
+    print_success "NAT模式配置文件已生成: docker-compose.nat.yml"
+}
+
 # 部署服务
 deploy_service() {
     print_info "开始部署 MTProxy 白名单系统..."
@@ -509,29 +593,38 @@ deploy_service() {
     # 构建镜像
     print_info "构建 Docker 镜像..."
     docker system prune -f
-    docker-compose build --no-cache
     
-    # 处理NAT模式配置冲突
+    # 根据NAT模式选择配置文件
     if [[ "$NAT_MODE" == "true" ]]; then
-        print_info "NAT模式：处理host网络模式配置..."
-        # 备份原配置
-        if [[ ! -f "docker-compose.yml.backup" ]]; then
-            cp docker-compose.yml docker-compose.yml.backup
-        fi
-        # 移除端口映射配置（host网络模式不兼容）
-        # 使用更精确的sed命令移除ports部分
-        sed '/^[[:space:]]*# 端口映射/,/^[[:space:]]*# NAT模式下使用host网络/d' docker-compose.yml.backup > docker-compose.yml.tmp
-        mv docker-compose.yml.tmp docker-compose.yml
-        print_info "已移除端口映射配置，使用host网络直接绑定"
+        print_info "NAT模式：使用专用配置文件..."
+        generate_nat_compose
+        
+        print_info "使用NAT模式配置构建镜像..."
+        docker-compose -f docker-compose.nat.yml build --no-cache
+        
+        print_info "启动NAT模式服务..."
+        docker-compose -f docker-compose.nat.yml up -d
+        
+        # 创建管理别名
+        echo "#!/bin/bash" > docker-compose-nat.sh
+        echo "docker-compose -f docker-compose.nat.yml \"\$@\"" >> docker-compose-nat.sh
+        chmod +x docker-compose-nat.sh
+        
+        print_info "✅ NAT模式部署完成"
+        print_info "📋 NAT模式管理命令："
+        print_info "   ./docker-compose-nat.sh ps     # 查看状态"
+        print_info "   ./docker-compose-nat.sh logs   # 查看日志"
+        print_info "   ./docker-compose-nat.sh restart # 重启服务"
+    else
+        print_info "Bridge模式：使用标准配置文件..."
+        docker-compose build --no-cache
+        docker-compose up -d
+        print_info "✅ Bridge模式部署完成"
     fi
-    
-    # 启动服务
-    print_info "启动服务容器..."
-    docker-compose up -d
     
     # 等待服务启动
     print_info "等待服务启动..."
-    sleep 10
+    sleep 15
     
     # 检查服务状态
     check_service_status
@@ -1022,12 +1115,30 @@ create_management_script() {
     echo "  ./deploy.sh clean    - 清理系统"
 }
 
+# 获取正确的docker-compose命令
+get_compose_cmd() {
+    if [[ -f ".env" ]]; then
+        source .env
+        if [[ "$NAT_MODE" == "true" ]]; then
+            echo "docker-compose -f docker-compose.nat.yml"
+        else
+            echo "docker-compose"
+        fi
+    else
+        echo "docker-compose"
+    fi
+}
+
 # 强制重建功能
 force_rebuild() {
     print_info "🔧 强制重建 MTProxy 白名单系统..."
     
+    # 获取正确的compose命令
+    local compose_cmd=$(get_compose_cmd)
+    
     print_info "1. 停止并清理所有容器..."
-    docker-compose down -v --remove-orphans 2>/dev/null || true
+    $compose_cmd down -v --remove-orphans 2>/dev/null || true
+    docker-compose down -v --remove-orphans 2>/dev/null || true  # 清理可能存在的标准配置
     
     print_info "2. 清理Docker缓存..."
     docker system prune -f
@@ -1041,16 +1152,17 @@ force_rebuild() {
         source .env
         if [[ "$NAT_MODE" == "true" ]]; then
             print_info "NAT模式：将使用host网络，nginx直接监听端口 $MTPROXY_PORT 和 $WEB_PORT"
+            generate_nat_compose
         else
             print_info "Bridge模式：将使用端口映射 $MTPROXY_PORT->443 和 $WEB_PORT->8888"
         fi
     fi
     
     print_info "5. 强制重建镜像（无缓存）..."
-    docker-compose build --no-cache --pull
+    $compose_cmd build --no-cache --pull
     
     print_info "6. 启动服务..."
-    docker-compose up -d
+    $compose_cmd up -d
     
     print_info "7. 等待服务启动..."
     sleep 15
@@ -1066,16 +1178,32 @@ diagnose_system() {
     print_info "🔍 系统诊断报告"
     print_line
     
+    # 获取正确的compose命令
+    local compose_cmd=$(get_compose_cmd)
+    
     print_info "1. Docker 环境检查"
     docker --version
     docker-compose --version
     echo ""
     
-    print_info "2. 容器状态检查"
-    docker-compose ps
+    print_info "2. 配置模式检查"
+    if [[ -f ".env" ]]; then
+        source .env
+        if [[ "$NAT_MODE" == "true" ]]; then
+            print_info "当前模式: NAT模式 (host网络)"
+            print_info "使用配置: docker-compose.nat.yml"
+        else
+            print_info "当前模式: Bridge模式 (端口映射)"
+            print_info "使用配置: docker-compose.yml"
+        fi
+    fi
     echo ""
     
-    print_info "3. 端口监听检查"
+    print_info "3. 容器状态检查"
+    $compose_cmd ps
+    echo ""
+    
+    print_info "4. 端口监听检查"
     if [[ -f ".env" ]]; then
         source .env
         print_info "配置的端口: MTProxy=$MTPROXY_PORT, Web=$WEB_PORT"
@@ -1084,16 +1212,16 @@ diagnose_system() {
     ss -tuln | grep -E ":443 |:444 |:8888 |:8080 " || print_warning "内部端口未监听"
     echo ""
     
-    print_info "4. 服务日志检查"
-    if docker-compose ps | grep -q "Up"; then
+    print_info "5. 服务日志检查"
+    if $compose_cmd ps | grep -q "Up"; then
         print_info "最近的容器日志:"
-        docker-compose logs --tail=20
+        $compose_cmd logs --tail=20
     else
         print_warning "容器未运行"
     fi
     echo ""
     
-    print_info "5. 网络连通性检查"
+    print_info "6. 网络连通性检查"
     if [[ -f ".env" ]]; then
         source .env
         local public_ip=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "localhost")
@@ -1115,6 +1243,9 @@ diagnose_system() {
 quick_fix() {
     print_info "🔧 快速修复常见问题..."
     
+    # 获取正确的compose命令
+    local compose_cmd=$(get_compose_cmd)
+    
     if [[ -f ".env" ]]; then
         source .env
     fi
@@ -1125,13 +1256,19 @@ quick_fix() {
         generate_config
     fi
     
-    print_info "2. 重启服务..."
-    docker-compose restart
+    print_info "2. 检查NAT模式配置..."
+    if [[ "$NAT_MODE" == "true" ]] && [[ ! -f "docker-compose.nat.yml" ]]; then
+        print_info "重新生成NAT模式配置..."
+        generate_nat_compose
+    fi
     
-    print_info "3. 等待服务启动..."
+    print_info "3. 重启服务..."
+    $compose_cmd restart
+    
+    print_info "4. 等待服务启动..."
     sleep 10
     
-    print_info "4. 检查修复结果..."
+    print_info "5. 检查修复结果..."
     check_service_status
     
     print_success "快速修复完成"
@@ -1141,27 +1278,30 @@ quick_fix() {
 test_ip_acquisition() {
     print_info "🔍 测试IP获取功能..."
     
-    if ! docker-compose ps | grep -q "Up"; then
+    # 获取正确的compose命令
+    local compose_cmd=$(get_compose_cmd)
+    
+    if ! $compose_cmd ps | grep -q "Up"; then
         print_error "服务未运行，请先启动服务"
         return 1
     fi
     
     print_info "1. 检查nginx配置..."
-    docker-compose exec -T mtproxy-whitelist nginx -t 2>/dev/null && print_success "nginx配置正常" || print_error "nginx配置异常"
+    $compose_cmd exec -T mtproxy-whitelist nginx -t 2>/dev/null && print_success "nginx配置正常" || print_error "nginx配置异常"
     
     print_info "2. 检查白名单文件..."
-    if docker-compose exec -T mtproxy-whitelist test -f /data/nginx/whitelist.txt 2>/dev/null; then
+    if $compose_cmd exec -T mtproxy-whitelist test -f /data/nginx/whitelist.txt 2>/dev/null; then
         print_success "白名单文件存在"
         print_info "当前白名单内容:"
-        docker-compose exec -T mtproxy-whitelist head -10 /data/nginx/whitelist.txt 2>/dev/null || true
+        $compose_cmd exec -T mtproxy-whitelist head -10 /data/nginx/whitelist.txt 2>/dev/null || true
     else
         print_warning "白名单文件不存在"
     fi
     
     print_info "3. 检查连接日志..."
-    if docker-compose exec -T mtproxy-whitelist test -f /var/log/nginx/stream_access.log 2>/dev/null; then
+    if $compose_cmd exec -T mtproxy-whitelist test -f /var/log/nginx/stream_access.log 2>/dev/null; then
         print_info "最近的连接记录:"
-        docker-compose exec -T mtproxy-whitelist tail -5 /var/log/nginx/stream_access.log 2>/dev/null || print_info "暂无连接记录"
+        $compose_cmd exec -T mtproxy-whitelist tail -5 /var/log/nginx/stream_access.log 2>/dev/null || print_info "暂无连接记录"
     else
         print_info "连接日志文件不存在"
     fi
@@ -1195,12 +1335,14 @@ main() {
             ;;
         "logs")
             print_info "查看日志..."
-            docker-compose logs -f --tail=50
+            local compose_cmd=$(get_compose_cmd)
+            $compose_cmd logs -f --tail=50
             exit 0
             ;;
         "status")
             print_info "服务状态..."
-            docker-compose ps
+            local compose_cmd=$(get_compose_cmd)
+            $compose_cmd ps
             if [[ -f ".env" ]]; then
                 source .env
                 print_info "端口监听状态:"
@@ -1210,23 +1352,29 @@ main() {
             ;;
         "stop")
             print_info "停止服务..."
-            docker-compose down
+            local compose_cmd=$(get_compose_cmd)
+            $compose_cmd down
             exit 0
             ;;
         "start")
             print_info "启动服务..."
-            docker-compose up -d
+            local compose_cmd=$(get_compose_cmd)
+            $compose_cmd up -d
             exit 0
             ;;
         "restart")
             print_info "重启服务..."
-            docker-compose restart
+            local compose_cmd=$(get_compose_cmd)
+            $compose_cmd restart
             exit 0
             ;;
         "clean")
             print_info "清理系统..."
-            docker-compose down -v --remove-orphans
+            local compose_cmd=$(get_compose_cmd)
+            $compose_cmd down -v --remove-orphans
+            docker-compose down -v --remove-orphans 2>/dev/null || true  # 清理可能存在的标准配置
             docker system prune -f
+            rm -f docker-compose.nat.yml docker-compose-nat.sh 2>/dev/null || true
             print_success "清理完成"
             exit 0
             ;;
