@@ -13,7 +13,7 @@ http {
     include /etc/nginx/mime.types;
     
     server {
-        listen 0.0.0.0:${WEB_PORT};
+        listen 0.0.0.0:${NGINX_WEB_PORT};
         root /usr/share/nginx/html;
         index index.html;
         

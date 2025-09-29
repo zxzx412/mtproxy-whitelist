@@ -25,6 +25,8 @@ mkdir -p /etc/nginx/conf.d /data/nginx
 # 设置默认端口值（防止环境变量未设置）
 export WEB_PORT=${WEB_PORT:-8888}
 export MTPROXY_PORT=${MTPROXY_PORT:-8765}
+export NGINX_WEB_PORT=${WEB_PORT}
+export NGINX_STREAM_PORT=${MTPROXY_PORT}
 
 echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_PORT}"
 
@@ -33,14 +35,16 @@ if [ "${NAT_MODE:-false}" = "true" ]; then
     echo "🔧 NAT模式：配置nginx直接监听外部端口${MTPROXY_PORT}"
     # 简化架构：nginx直接监听用户配置的外部端口
     export NGINX_STREAM_PORT=${MTPROXY_PORT}
+    export NGINX_WEB_PORT=${WEB_PORT}
 else
     echo "🔧 Bridge模式：配置nginx监听内部端口443"
     # Bridge模式下，nginx监听443，Docker映射外部端口到443
     export NGINX_STREAM_PORT=443
+    export NGINX_WEB_PORT=${WEB_PORT}
 fi
 
 # 替换环境变量并生成最终配置
-envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT $NGINX_WEB_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 echo "nginx配置文件内容预览："
 head -20 /etc/nginx/nginx.conf
