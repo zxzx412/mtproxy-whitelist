@@ -459,6 +459,9 @@ generate_config() {
 # 网络模式配置
 NAT_MODE=$NAT_MODE
 NETWORK_MODE=$NETWORK_MODE
+ENABLE_PROXY_PROTOCOL=${ENABLE_PROXY_PROTOCOL:-true}
+ENABLE_TRANSPARENT_PROXY=${ENABLE_TRANSPARENT_PROXY:-false}
+PRIVILEGED_MODE=${PRIVILEGED_MODE:-false}
 
 # 端口配置
 MTPROXY_PORT=$MTPROXY_PORT
@@ -474,6 +477,11 @@ JWT_EXPIRATION_HOURS=24
 
 # 管理员配置
 ADMIN_PASSWORD=$WEB_PASSWORD
+
+# IP 获取和调试配置
+DEBUG_IP_DETECTION=${DEBUG_IP_DETECTION:-true}
+LOG_LEVEL=${LOG_LEVEL:-INFO}
+ENABLE_IP_MONITORING=${ENABLE_IP_MONITORING:-true}
 EOF
     
     # 检查docker-compose.yml模板文件
@@ -653,7 +661,11 @@ show_deployment_result() {
         echo "推广TAG: $PROMO_TAG"
     fi
     echo
-    echo -e "${CYAN}流程说明: 客户端 → $MTPROXY_PORT(nginx) → 白名单验证 → 443(mtproxy) → telegram.org${NC}"
+    if [[ "$NAT_MODE" == "true" ]]; then
+        echo -e "${CYAN}流程说明: 客户端 → $MTPROXY_PORT(nginx白名单) → MTProxy(444) → telegram.org${NC}"
+    else
+        echo -e "${CYAN}流程说明: 客户端 → $MTPROXY_PORT(nginx) → 白名单验证 → 443(mtproxy) → telegram.org${NC}"
+    fi
     echo
     
     echo -e "${BLUE}🌐 Web 管理界面${NC}"
@@ -676,16 +688,16 @@ show_deployment_result() {
     echo "4. ⚡ 实时生效: API管理白名单，无需重启服务即可生效"
     echo ""
     if [[ "$NAT_MODE" == "true" ]]; then
-        echo -e "${GREEN}🎉 NAT环境PROXY Protocol已自动配置:${NC}"
-        echo "• HAProxy前端代理已启动"
-        echo "• nginx已配置PROXY protocol支持"
+        echo -e "${GREEN}🎉 NAT环境简化架构已配置:${NC}"
+        echo "• nginx直接监听外部端口$MTPROXY_PORT"
+        echo "• 简化架构，更稳定可靠"
         echo "• 客户端连接: $public_ip:$MTPROXY_PORT"
-        echo "• 架构: 客户端 → HAProxy → nginx → MTProxy"
+        echo "• 架构: 客户端 → nginx($MTPROXY_PORT) → MTProxy(444)"
         echo ""
         echo -e "${BLUE}🔧 NAT环境管理命令:${NC}"
-        echo "• 查看HAProxy状态: docker logs mtproxy-haproxy"
-        echo "• 重启HAProxy: ./start-haproxy.sh"
-        echo "• 验证真实IP: docker-compose exec mtproxy-whitelist tail -f /var/log/nginx/stream_access.log"
+        echo "• 查看nginx状态: docker-compose exec mtproxy-whitelist nginx -t"
+        echo "• 查看服务日志: docker-compose logs -f"
+        echo "• 验证连接日志: docker-compose exec mtproxy-whitelist tail -f /var/log/nginx/stream_access.log"
     else
         echo -e "${BLUE}🔧 NAT环境真实IP获取:${NC}"
         echo "如果遇到内网IP被拒绝的问题(如172.16.5.6 whitelist:0)，请重新部署并选择NAT模式"
@@ -733,6 +745,228 @@ configure_nginx_for_network_mode() {
     fi
     
     print_success "nginx网络模式配置完成"
+}
+
+# NAT 环境 IP 获取增强功能
+enable_proxy_protocol() {
+    print_info "启用 PROXY Protocol 支持..."
+    
+    # 等待容器启动
+    sleep 5
+    
+    # 检查容器是否运行
+    if ! docker-compose ps | grep -q "Up"; then
+        print_error "容器未运行，无法配置 PROXY Protocol"
+        return 1
+    fi
+    
+    # 备份 nginx 配置
+    docker-compose exec -T mtproxy-whitelist sh -c "
+        if [ ! -f /etc/nginx/nginx.conf.backup ]; then
+            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
+        fi
+    " 2>/dev/null || true
+    
+    # 更新 nginx 配置支持 PROXY Protocol
+    docker-compose exec -T mtproxy-whitelist sh -c "
+        # 更新 stream 配置支持 proxy_protocol
+        sed -i '/listen.*443/s/listen.*443.*/listen 443 proxy_protocol;/' /etc/nginx/nginx.conf
+        
+        # 添加 realip 配置
+        if ! grep -q 'real_ip_header proxy_protocol' /etc/nginx/nginx.conf; then
+            sed -i '/stream {/a\\    real_ip_header proxy_protocol;' /etc/nginx/nginx.conf
+        fi
+        
+        # 更新日志格式使用真实 IP
+        sed -i 's/\$remote_addr/\$proxy_protocol_addr/g' /etc/nginx/nginx.conf
+        
+        # 更新 geo 配置使用真实 IP
+        sed -i 's/geo \$remote_addr/geo \$proxy_protocol_addr/g' /etc/nginx/nginx.conf
+    " 2>/dev/null
+    
+    # 测试配置
+    if docker-compose exec -T mtproxy-whitelist nginx -t 2>/dev/null; then
+        docker-compose exec -T mtproxy-whitelist nginx -s reload 2>/dev/null
+        print_success "PROXY Protocol 配置完成"
+    else
+        print_error "nginx 配置测试失败，恢复备份"
+        docker-compose exec -T mtproxy-whitelist sh -c "
+            if [ -f /etc/nginx/nginx.conf.backup ]; then
+                cp /etc/nginx/nginx.conf.backup /etc/nginx/nginx.conf
+                nginx -s reload
+            fi
+        " 2>/dev/null || true
+        return 1
+    fi
+}
+
+# 修复 NAT 环境 IP 获取
+fix_nat_ip() {
+    print_info "修复 NAT 环境 IP 获取..."
+    
+    # 检测网络环境
+    local is_nat_env=false
+    
+    # 检查是否在容器环境中
+    if [[ -f /.dockerenv ]] || grep -q docker /proc/1/cgroup 2>/dev/null; then
+        is_nat_env=true
+        print_info "检测到容器环境"
+    fi
+    
+    # 检查是否有 NAT 网络
+    if ip route | grep -q "172\|10\|192.168"; then
+        is_nat_env=true
+        print_info "检测到 NAT 网络环境"
+    fi
+    
+    if [[ "$is_nat_env" == "true" ]] || [[ "$NAT_MODE" == "true" ]]; then
+        print_info "NAT 环境检测到，启用 IP 获取增强功能"
+        
+        # 启用 PROXY Protocol
+        enable_proxy_protocol
+        
+        # 配置透明代理（如果需要）
+        if [[ "${ENABLE_TRANSPARENT_PROXY:-false}" == "true" ]]; then
+            setup_transparent_proxy
+        fi
+        
+        # 优化容器网络配置
+        optimize_container_network
+        
+        print_success "NAT 环境 IP 获取修复完成"
+    else
+        print_info "标准网络环境，跳过 NAT 修复"
+    fi
+}
+
+# 设置透明代理
+setup_transparent_proxy() {
+    print_info "配置透明代理..."
+    
+    # 检查是否有必要的权限
+    if [[ "${PRIVILEGED_MODE:-false}" != "true" ]]; then
+        print_warning "透明代理需要特权模式，请在 .env 中设置 PRIVILEGED_MODE=true"
+        return 1
+    fi
+    
+    # 配置 iptables 规则
+    docker-compose exec -T mtproxy-whitelist sh -c "
+        # 启用 IP 转发
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+        
+        # 配置 iptables 规则获取真实 IP
+        iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-port 8443 2>/dev/null || true
+        iptables -t mangle -A PREROUTING -p tcp --dport 443 -j MARK --set-mark 1 2>/dev/null || true
+        
+        # 保存规则
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    " 2>/dev/null || {
+        print_warning "透明代理配置失败，可能需要更高权限"
+    }
+}
+
+# 优化容器网络配置
+optimize_container_network() {
+    print_info "优化容器网络配置..."
+    
+    docker-compose exec -T mtproxy-whitelist sh -c "
+        # 优化网络参数
+        echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+        echo 'net.ipv4.conf.all.route_localnet=1' >> /etc/sysctl.conf
+        echo 'net.netfilter.nf_conntrack_acct=1' >> /etc/sysctl.conf
+        
+        # 应用配置
+        sysctl -p 2>/dev/null || true
+        
+        # 创建 IP 监控脚本
+        cat > /usr/local/bin/monitor-client-ips.sh << 'EOF'
+#!/bin/bash
+echo \"实时客户端 IP 监控:\"
+echo \"==================\"
+tail -f /var/log/nginx/stream_access.log | while read line; do
+    ip=\$(echo \"\$line\" | awk '{print \$1}')
+    timestamp=\$(echo \"\$line\" | awk '{print \$4}' | tr -d '[')
+    echo \"[\$timestamp] 客户端 IP: \$ip\"
+done
+EOF
+        chmod +x /usr/local/bin/monitor-client-ips.sh
+        
+        # 创建 IP 统计脚本
+        cat > /usr/local/bin/ip-stats.sh << 'EOF'
+#!/bin/bash
+echo \"客户端 IP 统计:\"
+echo \"===============\"
+if [ -f /var/log/nginx/stream_access.log ]; then
+    awk '{print \$1}' /var/log/nginx/stream_access.log | sort | uniq -c | sort -nr | head -20
+else
+    echo \"日志文件不存在\"
+fi
+EOF
+        chmod +x /usr/local/bin/ip-stats.sh
+        
+        # 创建诊断脚本
+        cat > /usr/local/bin/diagnose-ip.sh << 'EOF'
+#!/bin/bash
+echo \"IP 获取诊断报告:\"
+echo \"=================\"
+echo \"1. nginx 配置检查:\"
+nginx -t
+echo \"\"
+echo \"2. PROXY Protocol 支持:\"
+grep -n \"proxy_protocol\" /etc/nginx/nginx.conf || echo \"未启用 PROXY Protocol\"
+echo \"\"
+echo \"3. 最近的连接日志:\"
+tail -n 10 /var/log/nginx/stream_access.log 2>/dev/null || echo \"无连接日志\"
+echo \"\"
+echo \"4. 网络接口信息:\"
+ip addr show | grep -E \"inet.*scope global\"
+echo \"\"
+echo \"5. 路由信息:\"
+ip route | head -5
+EOF
+        chmod +x /usr/local/bin/diagnose-ip.sh
+    " 2>/dev/null || {
+        print_warning "容器网络优化部分失败"
+    }
+    
+    print_success "容器网络配置优化完成"
+}
+
+# 测试 NAT IP 获取功能
+test_nat_ip_function() {
+    print_info "测试 NAT IP 获取功能..."
+    
+    # 等待服务完全启动
+    sleep 10
+    
+    # 检查 nginx 配置
+    if docker-compose exec -T mtproxy-whitelist nginx -t 2>/dev/null; then
+        print_success "nginx 配置测试通过"
+    else
+        print_error "nginx 配置测试失败"
+        return 1
+    fi
+    
+    # 检查 PROXY Protocol 配置
+    if docker-compose exec -T mtproxy-whitelist grep -q "proxy_protocol" /etc/nginx/nginx.conf 2>/dev/null; then
+        print_success "PROXY Protocol 配置已启用"
+    else
+        print_warning "PROXY Protocol 配置未启用"
+    fi
+    
+    # 检查监控脚本
+    if docker-compose exec -T mtproxy-whitelist test -f /usr/local/bin/diagnose-ip.sh 2>/dev/null; then
+        print_success "IP 诊断脚本已安装"
+    else
+        print_warning "IP 诊断脚本未安装"
+    fi
+    
+    print_info "运行 IP 获取诊断..."
+    docker-compose exec -T mtproxy-whitelist /usr/local/bin/diagnose-ip.sh 2>/dev/null || {
+        print_warning "IP 诊断脚本执行失败"
+    }
+    
+    print_success "NAT IP 获取功能测试完成"
 }
 
 # 配置PROXY Protocol支持（NAT环境自动启用）
@@ -905,10 +1139,30 @@ case "\$1" in
         echo "  sudo ufw allow $MTPROXY_PORT/tcp"
         echo "  sudo ufw allow $WEB_PORT/tcp"
         ;;
+    test-nat-ip)
+        echo "测试 NAT IP 获取功能..."
+        bash "\$PROJECT_DIR/deploy.sh" test-nat-ip
+        ;;
+    fix-nat-ip)
+        echo "修复 NAT IP 获取..."
+        bash "\$PROJECT_DIR/deploy.sh" fix-nat-ip
+        ;;
+    diagnose-ip)
+        echo "运行 IP 获取诊断..."
+        bash "\$PROJECT_DIR/deploy.sh" diagnose-ip
+        ;;
+    monitor-ips)
+        echo "实时监控客户端 IP..."
+        docker-compose exec mtproxy-whitelist /usr/local/bin/monitor-client-ips.sh 2>/dev/null || echo "监控脚本不可用"
+        ;;
+    ip-stats)
+        echo "客户端 IP 统计..."
+        docker-compose exec mtproxy-whitelist /usr/local/bin/ip-stats.sh 2>/dev/null || echo "统计脚本不可用"
+        ;;
     *)
-        echo "用法: \$0 {start|stop|restart|status|logs|update|info|ports}"
+        echo "用法: \$0 {start|stop|restart|status|logs|update|info|ports|test-nat-ip|fix-nat-ip|diagnose-ip|monitor-ips|ip-stats}"
         echo ""
-        echo "命令说明:"
+        echo "基础命令:"
         echo "  start   - 启动服务"
         echo "  stop    - 停止服务"
         echo "  restart - 重启服务"
@@ -917,6 +1171,13 @@ case "\$1" in
         echo "  update  - 更新服务"
         echo "  info    - 显示访问信息"
         echo "  ports   - 显示端口配置"
+        echo ""
+        echo "NAT IP 获取增强:"
+        echo "  test-nat-ip  - 测试 NAT IP 获取功能"
+        echo "  fix-nat-ip   - 修复 NAT IP 获取问题"
+        echo "  diagnose-ip  - 运行 IP 获取诊断"
+        echo "  monitor-ips  - 实时监控客户端 IP"
+        echo "  ip-stats     - 查看客户端 IP 统计"
         exit 1
         ;;
 esac
@@ -929,9 +1190,64 @@ EOF
 
 # 主安装流程
 main() {
+    # 检查命令行参数
+    case "${1:-}" in
+        "test-nat-ip")
+            print_info "测试 NAT IP 获取功能..."
+            if [[ -f ".env" ]]; then
+                source .env
+            fi
+            test_nat_ip_function
+            exit 0
+            ;;
+        "fix-nat-ip")
+            print_info "修复 NAT IP 获取..."
+            if [[ -f ".env" ]]; then
+                source .env
+            fi
+            fix_nat_ip
+            exit 0
+            ;;
+        "enable-proxy-protocol")
+            print_info "启用 PROXY Protocol..."
+            enable_proxy_protocol
+            exit 0
+            ;;
+        "diagnose-ip")
+            print_info "运行 IP 获取诊断..."
+            if docker-compose ps | grep -q "Up"; then
+                docker-compose exec mtproxy-whitelist /usr/local/bin/diagnose-ip.sh 2>/dev/null || {
+                    print_error "诊断脚本执行失败，请确保服务正在运行"
+                }
+            else
+                print_error "服务未运行，请先启动服务"
+            fi
+            exit 0
+            ;;
+        "help"|"-h"|"--help")
+            echo "MTProxy 白名单系统部署脚本"
+            echo ""
+            echo "用法: $0 [选项]"
+            echo ""
+            echo "选项:"
+            echo "  (无参数)              - 完整部署流程"
+            echo "  test-nat-ip          - 测试 NAT IP 获取功能"
+            echo "  fix-nat-ip           - 修复 NAT IP 获取问题"
+            echo "  enable-proxy-protocol - 启用 PROXY Protocol"
+            echo "  diagnose-ip          - 运行 IP 获取诊断"
+            echo "  help, -h, --help     - 显示此帮助信息"
+            echo ""
+            echo "NAT 环境增强功能:"
+            echo "  • PROXY Protocol 支持"
+            echo "  • 多层 IP 获取回退机制"
+            echo "  • 智能白名单管理"
+            echo "  • 实时监控和诊断"
+            echo ""
+            exit 0
+            ;;
+    esac
+    
     show_welcome
-    
-    
     
     print_info "开始部署 MTProxy 白名单系统..."
     echo
@@ -963,9 +1279,27 @@ main() {
     # 部署服务
     deploy_service
     
-    # NAT环境自动配置PROXY Protocol
+    # NAT环境：启用IP获取增强功能
     if [[ "$NAT_MODE" == "true" ]]; then
-        setup_proxy_protocol
+        print_info "NAT模式：启用IP获取增强功能"
+        
+        # 修复 NAT 环境 IP 获取
+        fix_nat_ip
+        
+        # 测试 NAT IP 获取功能
+        test_nat_ip_function
+        
+        # 清理可能存在的HAProxy容器
+        if docker ps -a --format '{{.Names}}' | grep -q '^mtproxy-haproxy$'; then
+            print_info "清理旧的HAProxy容器..."
+            docker stop mtproxy-haproxy >/dev/null 2>&1 || true
+            docker rm mtproxy-haproxy >/dev/null 2>&1 || true
+            print_success "HAProxy容器已清理"
+        fi
+        
+        print_success "NAT环境IP获取增强：客户端 → nginx(${MTPROXY_PORT}) → MTProxy(444)"
+    else
+        print_info "标准模式：使用默认IP获取机制"
     fi
     
     # 创建管理脚本

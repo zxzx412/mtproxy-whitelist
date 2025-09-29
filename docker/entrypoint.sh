@@ -30,9 +30,9 @@ echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_POR
 
 # 根据NAT模式配置nginx监听端口
 if [ "${NAT_MODE:-false}" = "true" ]; then
-    echo "🔧 NAT模式：配置nginx监听外部端口443用于HAProxy连接"
-    # NAT模式下，nginx需要监听443端口接收HAProxy的连接
-    export NGINX_STREAM_PORT=443
+    echo "🔧 NAT模式：配置nginx直接监听外部端口${MTPROXY_PORT}"
+    # 简化架构：nginx直接监听用户配置的外部端口
+    export NGINX_STREAM_PORT=${MTPROXY_PORT}
 else
     echo "🔧 Bridge模式：配置nginx监听内部端口443"
     # Bridge模式下，nginx监听443，Docker映射外部端口到443
@@ -57,27 +57,48 @@ echo "::1" >> /data/nginx/whitelist.txt
 echo "生成nginx白名单映射配置..."
 /usr/local/bin/generate-whitelist-map.sh generate
 
-# 检测NAT环境配置
+# 检测和配置NAT环境
 echo "检测NAT环境配置..."
 if [ "${NAT_MODE:-false}" = "true" ]; then
-    echo "🔍 检测到NAT模式"
-    echo "⚠️  NAT环境需要手动配置白名单或启用透明代理"
-    echo "🔒 出于安全考虑，不会自动添加内网段到白名单"
-    echo "📖 请参考部署后的说明文档进行安全配置"
+    echo "🔍 检测到NAT模式，启用IP获取增强功能"
     
+    # 运行NAT白名单修复脚本
+    if [ -f "/usr/local/bin/fix-nat-whitelist.sh" ]; then
+        echo "🔧 运行NAT白名单修复..."
+        /usr/local/bin/fix-nat-whitelist.sh fix
+    fi
+    
+    # 启用PROXY Protocol支持
+    if [ "${ENABLE_PROXY_PROTOCOL:-true}" = "true" ]; then
+        echo "🔧 启用PROXY Protocol支持..."
+        if [ -f "/usr/local/bin/enable-proxy-protocol.sh" ]; then
+            /usr/local/bin/enable-proxy-protocol.sh enable
+        fi
+    fi
+    
+    # 运行容器内IP获取增强
+    if [ -f "/usr/local/bin/enhance-ip-detection.sh" ]; then
+        echo "🔧 启用IP检测增强..."
+        /usr/local/bin/enhance-ip-detection.sh
+    fi
+    
+    echo "✅ NAT环境IP获取功能配置完成"
+    echo "🌐 支持PROXY Protocol和真实IP获取"
+    echo "📊 可使用以下命令监控IP获取状态："
+    echo "   - analyze-nat-ips.sh     # 分析IP连接"
+    echo "   - monitor-client-ips.sh  # 实时监控"
+    echo "   - diagnose-ip.sh         # 运行诊断"
+else
+    echo "🔍 标准模式，使用基础IP获取"
     # 仅添加必要的本地回环地址
     if ! grep -q "127.0.0.0/8" /data/nginx/whitelist.txt 2>/dev/null; then
         cat >> /data/nginx/whitelist.txt << EOF
 
-# === NAT环境基础配置 ===
-# 仅添加本地回环地址，其他IP请通过Web界面手动添加
-127.0.0.0/8
+# === 标准环境基础配置 ===
+127.0.0.1
 ::1
 EOF
     fi
-    
-    echo "✅ NAT环境基础配置完成（仅本地回环）"
-    echo "🌐 请通过Web界面添加具体的客户端IP地址"
 fi
 
 # 启动API服务

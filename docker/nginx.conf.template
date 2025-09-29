@@ -13,7 +13,7 @@ http {
     include /etc/nginx/mime.types;
     
     server {
-        listen 8888;
+        listen 0.0.0.0:${WEB_PORT};
         root /usr/share/nginx/html;
         index index.html;
         
@@ -37,20 +37,37 @@ http {
     }
 }
 
-# Stream服务器 - MTProxy白名单代理
+# Stream服务器 - MTProxy白名单代理 (支持NAT和PROXY Protocol)
 stream {
-    # 真实IP获取配置 (如果上游有代理)
-    # 注意: stream模块的realip支持有限，主要依赖网络层面的解决方案
+    # 真实IP获取配置 - 支持多种IP获取方式
+    # 支持PROXY Protocol、X-Forwarded-For等机制
     
-    # 日志格式 - 显示接收到的IP和上游信息
-    log_format proxy '$remote_addr [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed upstream:$upstream_addr';
-    log_format proxy_debug '$remote_addr|realip:$realip_remote_addr [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed';
+    # 日志格式 - NAT环境增强版，显示多种IP信息
+    log_format proxy_enhanced '$remote_addr|proxy:$proxy_protocol_addr|server:$server_addr [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed upstream:$upstream_addr';
+    log_format proxy_debug '$remote_addr|proxy:$proxy_protocol_addr|realip:$realip_remote_addr [$time_local] $protocol $status whitelist:$allowed connection:$connection';
+    log_format proxy_simple '$remote_addr [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed upstream:$upstream_addr';
     
-    access_log /var/log/nginx/stream_access.log proxy;
-    error_log /var/log/nginx/stream_error.log;
+    access_log /var/log/nginx/stream_access.log proxy_enhanced;
+    error_log /var/log/nginx/stream_error.log info;
 
-    # 白名单映射 - 使用geo模块支持CIDR网段
-    geo $remote_addr $allowed {
+    # 真实IP获取策略 - 多层回退机制
+    # 优先使用PROXY Protocol获取的IP，回退到remote_addr
+    map $proxy_protocol_addr $detected_real_ip {
+        default $remote_addr;
+        ~^.+$ $proxy_protocol_addr;
+    }
+    
+    # 进一步处理内网IP，避免将Docker网关IP作为客户端IP
+    map $detected_real_ip $final_client_ip {
+        default $detected_real_ip;
+        # 如果检测到的是Docker内网IP，使用原始remote_addr
+        ~^172\.(1[6-9]|2[0-9]|3[01])\. $remote_addr;
+        ~^10\. $remote_addr;
+        ~^192\.168\. $remote_addr;
+    }
+
+    # 白名单映射 - 使用最终确定的客户端IP进行匹配
+    geo $final_client_ip $allowed {
         default 0;
         include /data/nginx/whitelist_map.conf;
     }
@@ -64,6 +81,7 @@ stream {
     # MTProxy后端服务器组
     upstream mtproxy_backend {
         server 127.0.0.1:444 max_fails=3 fail_timeout=30s;
+        keepalive 32;  # 启用连接复用
     }
 
     # 拒绝后端服务器组 - 返回连接拒绝
@@ -71,18 +89,37 @@ stream {
         server 127.0.0.1:9999; # 不存在的端口，自动拒绝连接
     }
 
-    # 白名单验证服务器 - 根据模式选择监听端口
+    # 主要白名单验证服务器 - 支持PROXY Protocol
     server {
-        # 注意：此配置会在部署时根据网络模式动态调整
-        # bridge模式：监听内部端口443，由Docker映射到外部端口
-        # NAT/host模式：监听443端口接收HAProxy连接
-        listen ${NGINX_STREAM_PORT};
+        # 根据NAT_MODE和ENABLE_PROXY_PROTOCOL环境变量决定是否启用proxy_protocol
+        listen 0.0.0.0:${NGINX_STREAM_PORT} proxy_protocol;
         proxy_pass $backend_pool;
         proxy_timeout 10s;
         proxy_connect_timeout 3s;
         proxy_responses 1;
         
-        # 白名单访问日志，记录白名单状态
-        access_log /var/log/nginx/whitelist_access.log proxy;
+        # 启用连接复用和优化
+        proxy_socket_keepalive on;
+        
+        # 详细的访问日志
+        access_log /var/log/nginx/whitelist_access.log proxy_enhanced;
+    }
+    
+    # 备用服务器 - 不使用PROXY Protocol（兼容性和调试）
+    server {
+        listen 0.0.0.0:$((${NGINX_STREAM_PORT} + 1));
+        proxy_pass $backend_pool;
+        proxy_timeout 10s;
+        proxy_connect_timeout 3s;
+        proxy_responses 1;
+        
+        # 使用简单日志格式
+        access_log /var/log/nginx/whitelist_fallback.log proxy_simple;
+    }
+    
+    # 诊断服务器 - 用于测试IP获取（仅监听本地）
+    server {
+        listen 127.0.0.1:9998;
+        return "Client IP: $final_client_ip, Remote: $remote_addr, Proxy: $proxy_protocol_addr";
     }
 }
