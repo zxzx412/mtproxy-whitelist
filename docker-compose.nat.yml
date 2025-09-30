@@ -12,10 +12,14 @@ services:
     # NAT模式：使用host网络，只监听客户端连接端口
     network_mode: host
     
-    # HAProxy配置文件
+    # HAProxy配置文件和启动脚本
     volumes:
-      - ./docker/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./docker/haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
+      - ./docker/haproxy-entrypoint.sh:/usr/local/bin/haproxy-entrypoint.sh:ro
       - haproxy_logs:/var/log/haproxy
+    
+    # 使用自定义启动脚本
+    entrypoint: ["/bin/sh", "/usr/local/bin/haproxy-entrypoint.sh"]
     
     # 环境变量 - 用于配置文件模板替换
     environment:

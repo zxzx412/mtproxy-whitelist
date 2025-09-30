@@ -1,4 +1,4 @@
-# HAProxy配置 - NAT环境真实IP获取
+# HAProxy配置模板 - NAT环境真实IP获取
 # 用于在NAT环境下通过PROXY Protocol传递真实客户端IP
 
 global
@@ -20,7 +20,7 @@ stats timeout 2m
 
 # MTProxy前端 - 接收外部连接
 frontend mtproxy_frontend
-    bind *:14202
+    bind *:${MTPROXY_PORT}
     mode tcp
     
     # 记录连接信息
@@ -35,15 +35,15 @@ backend mtproxy_backend
     balance roundrobin
     
     # 启用PROXY Protocol v1，向nginx传递真实客户端IP
-    server nginx1 127.0.0.1:445 send-proxy check
+    server nginx1 127.0.0.1:${PROXY_PROTOCOL_PORT} send-proxy check
     
 # Web管理界面前端（直接转发，不需要PROXY Protocol）
 frontend web_frontend
-    bind *:8787
+    bind *:${WEB_PORT}
     mode tcp
     default_backend web_backend
 
 # Web管理界面后端
 backend web_backend
     mode tcp
-    server nginx_web 127.0.0.1:8787 check
+    server nginx_web 127.0.0.1:${NGINX_WEB_PORT} check
