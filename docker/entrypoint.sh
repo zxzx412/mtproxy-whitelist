@@ -204,6 +204,21 @@ fi
 
 echo "✅ 所有服务启动完成"
 
+# 显示连接信息
+echo ""
+echo "🔗 MTProxy 连接信息："
+echo "=========================================="
+source /opt/mtproxy/mtp_config
+echo "📱 连接密钥: $CLIENT_SECRET"
+echo "🌐 服务器IP: ${ADVERTISED_IP}"
+echo "🔌 服务端口: ${ADVERTISED_PORT}"
+echo ""
+echo "📋 Telegram连接链接:"
+echo "https://t.me/proxy?server=${ADVERTISED_IP}&port=${ADVERTISED_PORT}&secret=${CLIENT_SECRET}"
+echo ""
+echo "📊 管理界面: http://localhost:${WEB_PORT}"
+echo "=========================================="
+
 # 保持容器运行
 while true; do
     sleep 30
