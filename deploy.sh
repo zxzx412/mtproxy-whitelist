@@ -462,7 +462,7 @@ generate_config() {
 NAT_MODE=$NAT_MODE
 NETWORK_MODE=$NETWORK_MODE
 HAPROXY_ENABLED=$([ "$NAT_MODE" == "true" ] && echo "true" || echo "false")
-PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}
+PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-445}
 ENABLE_PROXY_PROTOCOL=${ENABLE_PROXY_PROTOCOL:-true}
 ENABLE_TRANSPARENT_PROXY=${ENABLE_TRANSPARENT_PROXY:-false}
 PRIVILEGED_MODE=${PRIVILEGED_MODE:-false}
@@ -1912,10 +1912,19 @@ auto_deploy_haproxy_nat() {
 # 部署HAProxy+PROXY Protocol模式
 deploy_haproxy_mode() {
     print_line
-    echo "🚀 部署HAProxy+PROXY Protocol模式"
+    echo "🚀 部署HAProxy+PROXY Protocol模式（完整流程）"
     print_line
     
-    # 检查必要文件
+    # 1. 停止现有服务
+    print_info "1. 停止现有服务..."
+    docker-compose down >/dev/null 2>&1 || true
+    docker-compose -f docker-compose.nat.yml down >/dev/null 2>&1 || true
+    docker stop mtproxy-whitelist mtproxy-haproxy >/dev/null 2>&1 || true
+    docker rm mtproxy-whitelist mtproxy-haproxy >/dev/null 2>&1 || true
+    print_success "✅ 现有服务已停止"
+    
+    # 2. 检查必要文件
+    print_info "2. 检查配置文件..."
     if [[ ! -f "docker-compose.nat.yml" ]]; then
         print_error "docker-compose.nat.yml 文件不存在"
         return 1
@@ -1925,6 +1934,7 @@ deploy_haproxy_mode() {
         print_error "docker/haproxy.cfg 文件不存在"
         return 1
     fi
+    print_success "✅ 配置文件检查完成"
     
     # 检查环境变量
     check_env_file
@@ -1934,71 +1944,93 @@ deploy_haproxy_mode() {
         export $(grep -v '^#' .env | xargs)
     fi
     
-    # 设置默认值
+    # 3. 设置环境变量
+    print_info "3. 配置环境变量..."
     export MTPROXY_PORT=${MTPROXY_PORT:-14202}
     export WEB_PORT=${WEB_PORT:-8787}
-    export PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}
+    export PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-445}
     
-    print_info "HAProxy模式配置："
-    print_info "  外部MTProxy端口: ${MTPROXY_PORT}"
-    print_info "  外部Web端口: ${WEB_PORT}"
-    print_info "  内部PROXY Protocol端口: ${PROXY_PROTOCOL_PORT}"
+    print_info "HAProxy+NAT模式配置："
+    print_info "  🌐 外部MTProxy端口: ${MTPROXY_PORT} (客户端连接)"
+    print_info "  🌐 外部Web管理端口: ${WEB_PORT} (管理界面)"
+    print_info "  🔒 内部PROXY Protocol端口: ${PROXY_PROTOCOL_PORT} (HAProxy→nginx)"
+    print_info "  🔒 内部MTProxy端口: 444 (实际服务)"
     
-    # 检查端口冲突
-    check_port_conflict "${MTPROXY_PORT}" "MTProxy"
+    # 4. 检查端口冲突
+    print_info "4. 检查端口冲突..."
+    check_port_conflict "${MTPROXY_PORT}" "MTProxy客户端"
     check_port_conflict "${WEB_PORT}" "Web管理"
-    check_port_conflict "${PROXY_PROTOCOL_PORT}" "PROXY Protocol"
+    # 不检查内部端口冲突，因为是内部使用
+    print_success "✅ 端口检查完成"
     
-    # 停止现有服务
-    print_info "停止现有服务..."
-    docker-compose down >/dev/null 2>&1 || true
-    if [[ -f "docker-compose-nat.sh" ]]; then
-        ./docker-compose-nat.sh down >/dev/null 2>&1 || true
-    fi
+    # 5. 构建和启动服务
+    print_info "5. 构建HAProxy+NAT模式镜像..."
+    docker-compose -f docker-compose.nat.yml build --no-cache
+    print_success "✅ 镜像构建完成"
     
-    # 构建镜像
-    print_info "构建HAProxy模式镜像..."
-    if [[ -f "docker-compose-nat.sh" ]]; then
-        ./docker-compose-nat.sh build
-    else
-        docker-compose -f docker-compose.nat.yml build
-    fi
+    print_info "6. 启动HAProxy+PROXY Protocol服务..."
+    docker-compose -f docker-compose.nat.yml up -d
+    print_success "✅ 服务启动完成"
     
-    # 启动服务
-    print_info "启动HAProxy+PROXY Protocol服务..."
-    if [[ -f "docker-compose-nat.sh" ]]; then
-        ./docker-compose-nat.sh up -d
-    else
-        docker-compose -f docker-compose.nat.yml up -d
-    fi
+    # 7. 等待服务就绪
+    print_info "7. 等待服务就绪..."
+    sleep 15
     
-    # 等待服务启动
-    print_info "等待服务启动..."
-    sleep 10
+    # 8. 验证部署结果
+    print_info "8. 验证部署结果..."
     
-    # 检查服务状态
-    print_info "检查服务状态..."
+    # 检查容器状态
+    print_info "检查容器状态..."
     docker-compose -f docker-compose.nat.yml ps
     
-    # 验证HAProxy
-    if docker-compose -f docker-compose.nat.yml exec -T haproxy haproxy -vv >/dev/null 2>&1; then
-        print_success "✅ HAProxy服务运行正常"
+    # 检查端口监听
+    print_info "检查端口监听状态..."
+    if netstat -tlnp 2>/dev/null | grep -q ":${MTPROXY_PORT} "; then
+        print_success "✅ MTProxy端口 ${MTPROXY_PORT} 监听正常"
     else
-        print_error "❌ HAProxy服务异常"
+        print_warning "⚠️  MTProxy端口 ${MTPROXY_PORT} 未监听"
     fi
     
-    # 验证nginx
-    if docker-compose -f docker-compose.nat.yml exec -T mtproxy-whitelist pgrep nginx >/dev/null 2>&1; then
-        print_success "✅ nginx服务运行正常"
+    if netstat -tlnp 2>/dev/null | grep -q ":${WEB_PORT} "; then
+        print_success "✅ Web管理端口 ${WEB_PORT} 监听正常"
     else
-        print_error "❌ nginx服务异常"
+        print_warning "⚠️  Web管理端口 ${WEB_PORT} 未监听"
     fi
     
+    # 验证HAProxy配置
+    print_info "验证HAProxy配置..."
+    if docker exec mtproxy-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg >/dev/null 2>&1; then
+        print_success "✅ HAProxy配置正确"
+    else
+        print_error "❌ HAProxy配置错误"
+    fi
+    
+    # 验证nginx配置
+    print_info "验证nginx配置..."
+    if docker exec mtproxy-whitelist nginx -t >/dev/null 2>&1; then
+        print_success "✅ nginx配置正确"
+    else
+        print_error "❌ nginx配置错误"
+    fi
+    
+    # 9. 显示部署结果
+    print_line
     print_success "🎉 HAProxy+PROXY Protocol模式部署完成！"
+    print_line
+    
+    print_info "📊 部署信息："
+    print_info "  🌐 客户端连接: 服务器IP:${MTPROXY_PORT}"
+    print_info "  🌐 Web管理界面: http://服务器IP:${WEB_PORT}"
+    print_info "  🔄 网络流向: 客户端 → HAProxy:${MTPROXY_PORT} → nginx:${PROXY_PROTOCOL_PORT} → MTProxy:444"
+    
     print_info "📋 管理命令："
-    print_info "  ./docker-compose-nat.sh logs    # 查看日志"
-    print_info "  ./docker-compose-nat.sh test-ip # 测试IP获取"
-    print_info "  ./deploy.sh test-haproxy        # 测试HAProxy模式"
+    print_info "  docker-compose -f docker-compose.nat.yml logs -f    # 查看日志"
+    print_info "  docker exec mtproxy-whitelist tail -f /var/log/nginx/proxy_protocol_access.log  # 查看IP获取日志"
+    print_info "  ./deploy.sh test-haproxy                            # 测试HAProxy模式"
+    
+    print_info "🔍 验证真实IP获取："
+    print_info "  docker exec mtproxy-whitelist tail -5 /var/log/nginx/proxy_protocol_access.log"
+    print_info "  应该显示真实客户端IP，而不是内网IP"
 }
 
 # 测试HAProxy模式IP获取

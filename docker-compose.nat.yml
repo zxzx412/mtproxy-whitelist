@@ -21,7 +21,7 @@ services:
     environment:
       - MTPROXY_PORT=${MTPROXY_PORT:-14202}        # 客户端连接端口（对外）
       - WEB_PORT=${WEB_PORT:-8787}                 # Web管理端口（对外）
-      - PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}  # 内部PROXY Protocol端口
+      - PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-445}  # 内部PROXY Protocol端口
     
     # 健康检查
     healthcheck:
@@ -67,7 +67,7 @@ services:
       - API_PORT=8080                               # API内部端口
       - NAT_MODE=true                               # NAT模式启用
       - HAPROXY_ENABLED=true                        # 启用HAProxy支持
-      - PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}  # PROXY Protocol专用端口（仅内部）
+      - PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-445}  # PROXY Protocol专用端口（仅内部）
     
     # 数据卷挂载
     volumes:

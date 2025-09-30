@@ -54,8 +54,8 @@ if [ "${NAT_MODE:-false}" = "true" ]; then
         # HAProxy模式：nginx使用内部端口，避免与HAProxy的外部端口冲突
         export NGINX_STREAM_PORT=14204           # 内部端口，避免与HAProxy:14202冲突
         export NGINX_WEB_PORT=${WEB_PORT}        # Web端口
-        echo "   HAProxy监听: ${MTPROXY_PORT}(外部) -> nginx:14203(PROXY Protocol)"
-        echo "   nginx监听: ${NGINX_STREAM_PORT}(内部备用) + 14203(PROXY Protocol主要)"
+        echo "   HAProxy监听: ${MTPROXY_PORT}(外部) -> nginx:445(PROXY Protocol)"
+        echo "   nginx监听: ${NGINX_STREAM_PORT}(内部备用) + 445(PROXY Protocol主要)"
         echo "   ⚠️  客户端必须连接HAProxy端口${MTPROXY_PORT}，不能直连nginx"
     else
         echo "🔧 NAT模式：nginx直接监听外部端口 ${MTPROXY_PORT}(stream) 和 ${WEB_PORT}(web)"
@@ -71,7 +71,7 @@ else
 fi
 
 # 设置PROXY Protocol端口
-export PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}
+export PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-445}
 
 # 根据HAProxy模式选择nginx配置模板
 if [ "${HAPROXY_ENABLED:-false}" = "true" ]; then
