@@ -121,7 +121,10 @@ stream {
         server 127.0.0.1:9999; # 不存在的端口，自动拒绝连接
     }
 
-    # 主要白名单验证服务器 - 标准端口（直连）
+    # 主要白名单验证服务器配置
+    # 根据HAPROXY_ENABLED环境变量决定监听模式
+    
+    # 标准端口服务器（非HAProxy模式或Bridge模式）
     server {
         listen 0.0.0.0:${NGINX_STREAM_PORT};
         proxy_pass $backend_pool;
@@ -133,9 +136,9 @@ stream {
         access_log /var/log/nginx/whitelist_access.log proxy_enhanced;
     }
     
-    # PROXY Protocol端口 - 用于HAProxy转发
+    # PROXY Protocol端口 - 专用于HAProxy转发
     server {
-        listen 0.0.0.0:14203 proxy_protocol;  # 固定端口避免变量拼接
+        listen 0.0.0.0:${PROXY_PROTOCOL_PORT} proxy_protocol;
         proxy_pass $backend_pool;
         proxy_timeout 10s;
         proxy_connect_timeout 3s;

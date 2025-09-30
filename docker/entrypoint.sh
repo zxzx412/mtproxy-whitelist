@@ -50,12 +50,13 @@ echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_POR
 # 根据NAT模式和HAProxy配置nginx监听端口
 if [ "${NAT_MODE:-false}" = "true" ]; then
     if [ "${HAPROXY_ENABLED:-false}" = "true" ]; then
-        echo "🔧 NAT+HAProxy模式：nginx监听内部端口，HAProxy处理外部连接"
-        # HAProxy模式：nginx监听内部端口，HAProxy转发外部流量
-        export NGINX_STREAM_PORT=${MTPROXY_PORT}      # 标准端口（直连备用）
-        export NGINX_WEB_PORT=${WEB_PORT}             # Web端口
+        echo "🔧 NAT+HAProxy模式：nginx避开外部端口，防止与HAProxy冲突"
+        # HAProxy模式：nginx使用内部端口，避免与HAProxy的外部端口冲突
+        export NGINX_STREAM_PORT=14204           # 内部端口，避免与HAProxy:14202冲突
+        export NGINX_WEB_PORT=${WEB_PORT}        # Web端口
         echo "   HAProxy监听: ${MTPROXY_PORT}(外部) -> nginx:14203(PROXY Protocol)"
-        echo "   nginx监听: ${NGINX_STREAM_PORT}(标准) + 14203(PROXY Protocol)"
+        echo "   nginx监听: ${NGINX_STREAM_PORT}(内部备用) + 14203(PROXY Protocol主要)"
+        echo "   ⚠️  客户端必须连接HAProxy端口${MTPROXY_PORT}，不能直连nginx"
     else
         echo "🔧 NAT模式：nginx直接监听外部端口 ${MTPROXY_PORT}(stream) 和 ${WEB_PORT}(web)"
         # 传统NAT模式：nginx直接监听用户配置的外部端口
@@ -69,8 +70,20 @@ else
     export NGINX_WEB_PORT=8888
 fi
 
-# 替换环境变量并生成最终配置
-envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT $NGINX_WEB_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+# 设置PROXY Protocol端口
+export PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}
+
+# 根据HAProxy模式选择nginx配置模板
+if [ "${HAPROXY_ENABLED:-false}" = "true" ]; then
+    echo "🔧 使用HAProxy专用nginx配置模板"
+    echo "   PROXY Protocol端口: ${PROXY_PROTOCOL_PORT}"
+    # HAProxy模式：使用专用配置，只监听PROXY Protocol端口
+    envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT $NGINX_WEB_PORT $PROXY_PROTOCOL_PORT' < /etc/nginx/nginx-haproxy.conf.template > /etc/nginx/nginx.conf
+else
+    echo "🔧 使用标准nginx配置模板"
+    # 标准模式：使用通用配置
+    envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT $NGINX_WEB_PORT $PROXY_PROTOCOL_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+fi
 
 echo "nginx配置文件内容预览："
 head -20 /etc/nginx/nginx.conf

@@ -1,0 +1,114 @@
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+load_module /usr/lib/nginx/modules/ngx_stream_module.so;
+
+events { 
+    worker_connections 1024; 
+}
+
+# HTTP服务器 - Web管理界面
+http {
+    include /etc/nginx/mime.types;
+    
+    server {
+        listen 0.0.0.0:${NGINX_WEB_PORT};
+        root /usr/share/nginx/html;
+        index index.html;
+        
+        location /api/ { 
+            proxy_pass http://127.0.0.1:8080; 
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+        
+        location /health { 
+            return 200 "OK"; 
+        }
+        
+        # 白名单重载接口 - 通过API处理
+        location /reload-whitelist {
+            proxy_pass http://127.0.0.1:8080/api/reload;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+}
+
+# Stream服务器 - MTProxy白名单代理 (HAProxy + PROXY Protocol 专用)
+stream {
+    # 真实IP获取配置 - 专为PROXY Protocol优化
+    
+    # 日志格式 - PROXY Protocol专用
+    log_format proxy_protocol '$remote_addr|proxy:$proxy_protocol_addr|final:$client_ip|public:$is_valid_public_ip [$time_local] $protocol $status $bytes_sent $bytes_received $session_time whitelist:$allowed upstream:$upstream_addr';
+    
+    access_log /var/log/nginx/proxy_protocol_access.log proxy_protocol;
+    error_log /var/log/nginx/stream_error.log info;
+
+    # PROXY Protocol IP获取策略
+    # 优先使用proxy_protocol_addr，如果为空则使用remote_addr
+    map $proxy_protocol_addr $client_ip {
+        default $proxy_protocol_addr;
+        "" $remote_addr;
+        "-" $remote_addr;
+    }
+    
+    # 检测是否为有效的公网IP
+    map $client_ip $is_valid_public_ip {
+        default 1;
+        ~^127\.                    0;   # localhost
+        ~^10\.                     0;   # Class A private
+        ~^172\.(1[6-9]|2[0-9]|3[01])\. 0;  # Class B private  
+        ~^192\.168\.               0;   # Class C private
+        ~^169\.254\.               0;   # Link-local
+        ~^224\.                    0;   # Multicast
+    }
+
+    # 白名单映射 - 使用PROXY Protocol获取的真实IP
+    geo $client_ip $allowed {
+        default 0;
+        include /data/nginx/whitelist_map.conf;
+    }
+
+    # 定义后端服务器组
+    map $allowed $backend_pool {
+        default reject_backend;
+        1 mtproxy_backend;
+    }
+
+    # MTProxy后端服务器组
+    upstream mtproxy_backend {
+        server 127.0.0.1:444 max_fails=3 fail_timeout=30s;
+    }
+
+    # 拒绝后端服务器组
+    upstream reject_backend {
+        server 127.0.0.1:9999; # 不存在的端口，自动拒绝连接
+    }
+
+    # PROXY Protocol专用端口 - 接收HAProxy转发的连接
+    server {
+        listen 0.0.0.0:${PROXY_PROTOCOL_PORT} proxy_protocol;
+        proxy_pass $backend_pool;
+        proxy_timeout 10s;
+        proxy_connect_timeout 3s;
+        proxy_responses 1;
+        
+        # PROXY Protocol专用日志
+        access_log /var/log/nginx/proxy_protocol_access.log proxy_protocol;
+    }
+    
+    # 诊断服务器 - 用于测试（仅监听本地）
+    server {
+        listen 127.0.0.1:9998;
+        proxy_pass 127.0.0.1:444;
+        proxy_timeout 1s;
+        proxy_connect_timeout 1s;
+        proxy_responses 1;
+        
+        # 诊断日志
+        access_log /var/log/nginx/diagnostic.log proxy_protocol;
+    }
+}

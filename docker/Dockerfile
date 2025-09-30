@@ -32,6 +32,7 @@ WORKDIR /app
 COPY web/ /usr/share/nginx/html/
 COPY api/ /opt/mtproxy-api/
 COPY docker/nginx.conf.template /etc/nginx/nginx.conf.template
+COPY docker/nginx-haproxy.conf.template /etc/nginx/nginx-haproxy.conf.template
 COPY docker/entrypoint.sh /entrypoint.sh
 
 # 创建目录结构

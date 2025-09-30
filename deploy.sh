@@ -1421,6 +1421,26 @@ main() {
             setup_haproxy_proxy_protocol
             exit 0
             ;;
+        "deploy-haproxy")
+            print_info "部署HAProxy+PROXY Protocol模式..."
+            deploy_haproxy_mode
+            exit 0
+            ;;
+        "test-haproxy")
+            print_info "测试HAProxy模式IP获取..."
+            test_haproxy_mode
+            exit 0
+            ;;
+        "deploy-haproxy")
+            print_info "部署HAProxy+PROXY Protocol模式..."
+            deploy_haproxy_mode
+            exit 0
+            ;;
+        "test-haproxy")
+            print_info "测试HAProxy模式IP获取..."
+            test_haproxy_mode
+            exit 0
+            ;;
         "logs")
             print_info "查看日志..."
             local compose_cmd=$(get_compose_cmd)
@@ -1492,8 +1512,10 @@ main() {
             echo "诊断命令:"
             echo "  diagnose     - 系统诊断"
             echo "  test-ip      - 测试IP获取"
-            echo "  fix-nat-ip   - 修复NAT环境真实IP获取"
-            echo "  setup-haproxy - 配置HAProxy PROXY Protocol"
+            echo "  fix-nat-ip     - 修复NAT环境真实IP获取"
+            echo "  setup-haproxy  - 配置HAProxy PROXY Protocol"
+            echo "  deploy-haproxy - 部署HAProxy+PROXY Protocol模式"
+            echo "  test-haproxy   - 测试HAProxy模式IP获取"
             echo ""
             echo "维护命令:"
             echo "  clean        - 清理系统"
@@ -1836,6 +1858,140 @@ setup_haproxy_proxy_protocol() {
             echo "❌ HAProxy配置验证失败"
         fi
     fi
+}
+
+# 部署HAProxy+PROXY Protocol模式
+deploy_haproxy_mode() {
+    print_line
+    echo "🚀 部署HAProxy+PROXY Protocol模式"
+    print_line
+    
+    # 检查必要文件
+    if [[ ! -f "docker-compose.nat.yml" ]]; then
+        print_error "docker-compose.nat.yml 文件不存在"
+        return 1
+    fi
+    
+    if [[ ! -f "docker/haproxy.cfg" ]]; then
+        print_error "docker/haproxy.cfg 文件不存在"
+        return 1
+    fi
+    
+    # 检查环境变量
+    check_env_file
+    
+    # 加载环境变量
+    if [[ -f ".env" ]]; then
+        export $(grep -v '^#' .env | xargs)
+    fi
+    
+    # 设置默认值
+    export MTPROXY_PORT=${MTPROXY_PORT:-14202}
+    export WEB_PORT=${WEB_PORT:-8787}
+    export PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}
+    
+    print_info "HAProxy模式配置："
+    print_info "  外部MTProxy端口: ${MTPROXY_PORT}"
+    print_info "  外部Web端口: ${WEB_PORT}"
+    print_info "  内部PROXY Protocol端口: ${PROXY_PROTOCOL_PORT}"
+    
+    # 检查端口冲突
+    check_port_conflict "${MTPROXY_PORT}" "MTProxy"
+    check_port_conflict "${WEB_PORT}" "Web管理"
+    check_port_conflict "${PROXY_PROTOCOL_PORT}" "PROXY Protocol"
+    
+    # 停止现有服务
+    print_info "停止现有服务..."
+    docker-compose down >/dev/null 2>&1 || true
+    if [[ -f "docker-compose-nat.sh" ]]; then
+        ./docker-compose-nat.sh down >/dev/null 2>&1 || true
+    fi
+    
+    # 构建镜像
+    print_info "构建HAProxy模式镜像..."
+    if [[ -f "docker-compose-nat.sh" ]]; then
+        ./docker-compose-nat.sh build
+    else
+        docker-compose -f docker-compose.nat.yml build
+    fi
+    
+    # 启动服务
+    print_info "启动HAProxy+PROXY Protocol服务..."
+    if [[ -f "docker-compose-nat.sh" ]]; then
+        ./docker-compose-nat.sh up -d
+    else
+        docker-compose -f docker-compose.nat.yml up -d
+    fi
+    
+    # 等待服务启动
+    print_info "等待服务启动..."
+    sleep 10
+    
+    # 检查服务状态
+    print_info "检查服务状态..."
+    docker-compose -f docker-compose.nat.yml ps
+    
+    # 验证HAProxy
+    if docker-compose -f docker-compose.nat.yml exec -T haproxy haproxy -vv >/dev/null 2>&1; then
+        print_success "✅ HAProxy服务运行正常"
+    else
+        print_error "❌ HAProxy服务异常"
+    fi
+    
+    # 验证nginx
+    if docker-compose -f docker-compose.nat.yml exec -T mtproxy-whitelist pgrep nginx >/dev/null 2>&1; then
+        print_success "✅ nginx服务运行正常"
+    else
+        print_error "❌ nginx服务异常"
+    fi
+    
+    print_success "🎉 HAProxy+PROXY Protocol模式部署完成！"
+    print_info "📋 管理命令："
+    print_info "  ./docker-compose-nat.sh logs    # 查看日志"
+    print_info "  ./docker-compose-nat.sh test-ip # 测试IP获取"
+    print_info "  ./deploy.sh test-haproxy        # 测试HAProxy模式"
+}
+
+# 测试HAProxy模式IP获取
+test_haproxy_mode() {
+    print_line
+    echo "🔍 测试HAProxy模式IP获取"
+    print_line
+    
+    # 检查服务状态
+    if ! docker-compose -f docker-compose.nat.yml ps | grep -q "Up"; then
+        print_error "HAProxy模式服务未运行，请先部署"
+        print_info "运行: ./deploy.sh deploy-haproxy"
+        return 1
+    fi
+    
+    print_info "1. 检查HAProxy配置..."
+    if docker-compose -f docker-compose.nat.yml exec -T haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg; then
+        print_success "✅ HAProxy配置正确"
+    else
+        print_error "❌ HAProxy配置错误"
+    fi
+    
+    print_info "2. 检查端口监听..."
+    print_info "HAProxy端口监听："
+    docker-compose -f docker-compose.nat.yml exec -T haproxy netstat -tlnp | grep -E ":(${MTPROXY_PORT:-14202}|${WEB_PORT:-8787}) " || print_warning "HAProxy端口未监听"
+    
+    print_info "nginx端口监听："
+    docker-compose -f docker-compose.nat.yml exec -T mtproxy-whitelist netstat -tlnp | grep -E ":(${PROXY_PROTOCOL_PORT:-14203}) " || print_warning "nginx PROXY Protocol端口未监听"
+    
+    print_info "3. 检查PROXY Protocol日志..."
+    print_info "最近的PROXY Protocol连接："
+    docker-compose -f docker-compose.nat.yml exec -T mtproxy-whitelist tail -10 /var/log/nginx/proxy_protocol_access.log 2>/dev/null || print_warning "暂无PROXY Protocol日志"
+    
+    print_info "4. 检查标准连接日志..."
+    print_info "最近的标准连接："
+    docker-compose -f docker-compose.nat.yml exec -T mtproxy-whitelist tail -10 /var/log/nginx/whitelist_access.log 2>/dev/null || print_warning "暂无标准连接日志"
+    
+    print_info "5. 网络架构验证..."
+    print_info "预期流向: 客户端 → HAProxy:${MTPROXY_PORT:-14202} → nginx:${PROXY_PROTOCOL_PORT:-14203} → MTProxy:444"
+    
+    print_success "✅ HAProxy模式测试完成"
+    print_info "💡 如果仍然看到内网IP，请确保客户端连接到HAProxy端口而不是直连nginx"
 }
 
 # 执行主流程

@@ -21,6 +21,7 @@ services:
       - MTPROXY_PORT=${MTPROXY_PORT:-14202}
       - WEB_PORT=${WEB_PORT:-8787}
       - NGINX_WEB_PORT=${NGINX_WEB_PORT:-8787}
+      - PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}
     
     # 健康检查
     healthcheck:
@@ -73,7 +74,7 @@ services:
       - NGINX_STREAM_PORT=${MTPROXY_PORT:-14202}    # nginx stream端口（与HAProxy后端对应）
       - NGINX_WEB_PORT=${WEB_PORT:-8787}            # nginx web端口
       - HAPROXY_ENABLED=true                    # 启用HAProxy支持
-      - PROXY_PROTOCOL_PORT=14203               # PROXY Protocol专用端口
+      - PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}  # PROXY Protocol专用端口
     
     # 数据卷挂载
     volumes:
