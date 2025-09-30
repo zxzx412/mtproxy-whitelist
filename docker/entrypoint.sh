@@ -70,9 +70,15 @@ head -20 /etc/nginx/nginx.conf
 echo "nginx stream配置预览："
 grep -A 10 "listen.*;" /etc/nginx/nginx.conf | head -15
 
-# 初始化白名单文件和映射
-echo "127.0.0.1" > /data/nginx/whitelist.txt
-echo "::1" >> /data/nginx/whitelist.txt
+# 初始化白名单文件和映射（确保无重复）
+cat > /data/nginx/whitelist.txt << 'EOF'
+# MTProxy 白名单配置文件
+# 每行一个IP地址或CIDR网段
+
+# 本地回环地址
+127.0.0.1
+::1
+EOF
 
 # 生成nginx白名单映射配置
 echo "生成nginx白名单映射配置..."
@@ -88,19 +94,14 @@ if [ "${NAT_MODE:-false}" = "true" ]; then
     # NAT模式下的IP获取优化（内置实现）
     echo "🔧 配置NAT环境IP获取优化..."
     
-    # 添加常见的内网IP段到白名单映射，避免误判
-    # 先清理可能的重复条目
-    grep -v "^127\." /data/nginx/whitelist.txt > /tmp/whitelist_clean.txt || true
-    grep -v "^::1" /tmp/whitelist_clean.txt > /data/nginx/whitelist.txt || true
-    
-    # 添加必要的本地地址（避免重复）
-    cat >> /data/nginx/whitelist.txt << 'EOF'
+    # 重新生成干净的白名单文件（NAT模式）
+    cat > /data/nginx/whitelist.txt << 'EOF'
+# MTProxy 白名单配置文件 - NAT模式
+# 每行一个IP地址或CIDR网段
 
 # === NAT环境IP获取优化 ===
-# 本地回环（IPv4）
+# 本地回环地址
 127.0.0.1
-
-# 本地回环（IPv6）
 ::1
 
 # 常见内网段（根据实际需要调整）
@@ -120,19 +121,16 @@ EOF
     echo "   - diagnose-ip.sh         # 运行诊断"
 else
     echo "🔍 标准模式，使用基础IP获取"
-    # 仅添加必要的本地回环地址（避免重复）
-    if ! grep -q "127.0.0.1" /data/nginx/whitelist.txt 2>/dev/null; then
-        # 先清理可能的重复条目
-        grep -v "^127\." /data/nginx/whitelist.txt > /tmp/whitelist_clean.txt || true
-        grep -v "^::1" /tmp/whitelist_clean.txt > /data/nginx/whitelist.txt || true
-        
-        cat >> /data/nginx/whitelist.txt << EOF
+    # 重新生成干净的白名单文件（标准模式）
+    cat > /data/nginx/whitelist.txt << 'EOF'
+# MTProxy 白名单配置文件 - 标准模式
+# 每行一个IP地址或CIDR网段
 
 # === 标准环境基础配置 ===
+# 本地回环地址
 127.0.0.1
 ::1
 EOF
-    fi
 fi
 
 # 启动API服务

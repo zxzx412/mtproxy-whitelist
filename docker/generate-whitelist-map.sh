@@ -59,6 +59,9 @@ EOF
     
     local ip_count=0  # 从0开始计数，避免重复
     
+    # 使用关联数组去重
+    declare -A seen_ips
+    
     # 处理白名单文件中的IP
     if [[ -f "$WHITELIST_FILE" ]]; then
         log "读取白名单文件: $WHITELIST_FILE"
@@ -71,15 +74,22 @@ EOF
                 ip=$(echo "$line" | xargs)
                 
                 if [[ -n "$ip" ]]; then
-                    # 调试：输出读取到的原始IP
-                    log "调试：从文件读取到IP: '$ip'"
-                    
-                    # 处理IP并添加到映射文件
-                    echo "${ip} 1;" >> "$tmp_map"
-                    ip_count=$((ip_count + 1))
-                    
-                    # 调试：确认写入的内容
-                    log "调试：写入映射文件: '${ip} 1;'"
+                    # 检查是否已经处理过这个IP（去重）
+                    if [[ -z "${seen_ips[$ip]}" ]]; then
+                        seen_ips[$ip]=1
+                        
+                        # 调试：输出读取到的原始IP
+                        log "调试：从文件读取到IP: '$ip'"
+                        
+                        # 处理IP并添加到映射文件
+                        echo "${ip} 1;" >> "$tmp_map"
+                        ip_count=$((ip_count + 1))
+                        
+                        # 调试：确认写入的内容
+                        log "调试：写入映射文件: '${ip} 1;'"
+                    else
+                        log "调试：跳过重复IP: '$ip'"
+                    fi
                 fi
             fi
         done < "$WHITELIST_FILE"
