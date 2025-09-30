@@ -1422,18 +1422,9 @@ main() {
             exit 0
             ;;
         "deploy-haproxy")
-            print_info "部署HAProxy+PROXY Protocol模式..."
-            deploy_haproxy_mode
-            exit 0
-            ;;
-        "test-haproxy")
-            print_info "测试HAProxy模式IP获取..."
-            test_haproxy_mode
-            exit 0
-            ;;
-        "deploy-haproxy")
-            print_info "部署HAProxy+PROXY Protocol模式..."
-            deploy_haproxy_mode
+            print_info "自动部署HAProxy+PROXY Protocol模式（NAT环境）..."
+            # 自动设置NAT模式并部署HAProxy
+            auto_deploy_haproxy_nat
             exit 0
             ;;
         "test-haproxy")
@@ -1858,6 +1849,44 @@ setup_haproxy_proxy_protocol() {
             echo "❌ HAProxy配置验证失败"
         fi
     fi
+}
+
+# 自动部署HAProxy NAT模式（无需用户选择）
+auto_deploy_haproxy_nat() {
+    print_line
+    echo "🚀 自动部署HAProxy+PROXY Protocol模式（NAT环境）"
+    print_line
+    
+    print_info "自动配置NAT模式环境..."
+    
+    # 自动设置NAT模式环境变量
+    export NETWORK_MODE="nat"
+    export HAPROXY_ENABLED="true"
+    
+    # 检查并创建.env文件
+    check_env_file
+    
+    # 更新.env文件中的网络模式
+    if [[ -f ".env" ]]; then
+        # 更新或添加网络模式配置
+        if grep -q "^NETWORK_MODE=" .env; then
+            sed -i 's/^NETWORK_MODE=.*/NETWORK_MODE=nat/' .env
+        else
+            echo "NETWORK_MODE=nat" >> .env
+        fi
+        
+        # 更新或添加HAProxy配置
+        if grep -q "^HAPROXY_ENABLED=" .env; then
+            sed -i 's/^HAPROXY_ENABLED=.*/HAPROXY_ENABLED=true/' .env
+        else
+            echo "HAPROXY_ENABLED=true" >> .env
+        fi
+        
+        print_success "✅ 已自动配置NAT模式环境变量"
+    fi
+    
+    # 调用HAProxy部署函数
+    deploy_haproxy_mode
 }
 
 # 部署HAProxy+PROXY Protocol模式
