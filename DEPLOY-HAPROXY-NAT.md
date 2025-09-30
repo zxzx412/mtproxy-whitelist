@@ -22,8 +22,10 @@ docker rm mtproxy-whitelist mtproxy-haproxy 2>/dev/null || true
 # 使用优化的NAT配置重新部署
 docker-compose -f docker-compose.nat.yml up -d --build
 
-# 或使用部署脚本
-./deploy.sh deploy-haproxy
+# 或使用部署脚本（推荐）
+./deploy.sh
+# 然后选择 "2. NAT模式 (host) - 适用于NAT环境/内网映射"
+# 系统会自动启用HAProxy+PROXY Protocol
 ```
 
 ### 3. 验证部署结果
