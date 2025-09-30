@@ -123,9 +123,8 @@ stream {
 
     # 主要白名单验证服务器 - 支持PROXY Protocol
     server {
-        # 同时监听标准端口和PROXY Protocol端口
+        # 监听标准端口
         listen 0.0.0.0:${NGINX_STREAM_PORT};
-        listen 0.0.0.0:${NGINX_STREAM_PORT}1 proxy_protocol;  # 额外的PROXY Protocol端口
         proxy_pass $backend_pool;
         proxy_timeout 10s;
         proxy_connect_timeout 3s;
@@ -133,6 +132,18 @@ stream {
         
         # 详细的访问日志 - 显示IP获取过程
         access_log /var/log/nginx/whitelist_access.log proxy_enhanced;
+    }
+    
+    # PROXY Protocol专用端口（如果需要）
+    server {
+        listen 0.0.0.0:${NGINX_STREAM_PORT}43 proxy_protocol;  # 使用固定偏移避免端口冲突
+        proxy_pass $backend_pool;
+        proxy_timeout 10s;
+        proxy_connect_timeout 3s;
+        proxy_responses 1;
+        
+        # PROXY Protocol日志
+        access_log /var/log/nginx/proxy_protocol_access.log proxy_enhanced;
     }
     
     # 诊断服务器 - 用于测试IP获取（仅监听本地）

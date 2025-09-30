@@ -89,12 +89,19 @@ if [ "${NAT_MODE:-false}" = "true" ]; then
     echo "🔧 配置NAT环境IP获取优化..."
     
     # 添加常见的内网IP段到白名单映射，避免误判
+    # 先清理可能的重复条目
+    grep -v "^127\." /data/nginx/whitelist.txt > /tmp/whitelist_clean.txt || true
+    grep -v "^::1" /tmp/whitelist_clean.txt > /data/nginx/whitelist.txt || true
+    
+    # 添加必要的本地地址（避免重复）
     cat >> /data/nginx/whitelist.txt << 'EOF'
 
 # === NAT环境IP获取优化 ===
-# 本地回环
-127.0.0.0/8
-::1/128
+# 本地回环（IPv4）
+127.0.0.1
+
+# 本地回环（IPv6）
+::1
 
 # 常见内网段（根据实际需要调整）
 # 10.0.0.0/8
@@ -113,8 +120,12 @@ EOF
     echo "   - diagnose-ip.sh         # 运行诊断"
 else
     echo "🔍 标准模式，使用基础IP获取"
-    # 仅添加必要的本地回环地址
-    if ! grep -q "127.0.0.0/8" /data/nginx/whitelist.txt 2>/dev/null; then
+    # 仅添加必要的本地回环地址（避免重复）
+    if ! grep -q "127.0.0.1" /data/nginx/whitelist.txt 2>/dev/null; then
+        # 先清理可能的重复条目
+        grep -v "^127\." /data/nginx/whitelist.txt > /tmp/whitelist_clean.txt || true
+        grep -v "^::1" /tmp/whitelist_clean.txt > /data/nginx/whitelist.txt || true
+        
         cat >> /data/nginx/whitelist.txt << EOF
 
 # === 标准环境基础配置 ===
