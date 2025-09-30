@@ -121,17 +121,28 @@ stream {
         server 127.0.0.1:9999; # 不存在的端口，自动拒绝连接
     }
 
-    # 主要白名单验证服务器
+    # 主要白名单验证服务器 - 标准端口（直连）
     server {
-        # 监听标准端口
         listen 0.0.0.0:${NGINX_STREAM_PORT};
         proxy_pass $backend_pool;
         proxy_timeout 10s;
         proxy_connect_timeout 3s;
         proxy_responses 1;
         
-        # 详细的访问日志 - 显示IP获取过程
+        # 标准连接日志
         access_log /var/log/nginx/whitelist_access.log proxy_enhanced;
+    }
+    
+    # PROXY Protocol端口 - 用于HAProxy转发
+    server {
+        listen 0.0.0.0:14203 proxy_protocol;  # 固定端口避免变量拼接
+        proxy_pass $backend_pool;
+        proxy_timeout 10s;
+        proxy_connect_timeout 3s;
+        proxy_responses 1;
+        
+        # PROXY Protocol连接日志
+        access_log /var/log/nginx/proxy_protocol_access.log proxy_enhanced;
     }
     
     # 诊断服务器 - 用于测试IP获取（仅监听本地）

@@ -1,0 +1,135 @@
+# NAT模式 Docker Compose 配置
+# 使用HAProxy + PROXY Protocol解决NAT环境真实IP获取问题
+
+services:
+  # HAProxy服务 - 前端代理，负责真实IP传递
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: mtproxy-haproxy
+    restart: unless-stopped
+    
+    # NAT模式：使用host网络，直接监听主机端口
+    network_mode: host
+    
+    # HAProxy配置文件
+    volumes:
+      - ./docker/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - haproxy_logs:/var/log/haproxy
+    
+    # 环境变量 - 用于配置文件模板替换
+    environment:
+      - MTPROXY_PORT=${MTPROXY_PORT:-14202}
+      - WEB_PORT=${WEB_PORT:-8787}
+      - NGINX_WEB_PORT=${NGINX_WEB_PORT:-8787}
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # 依赖关系 - 等待nginx启动
+    depends_on:
+      mtproxy-whitelist:
+        condition: service_healthy
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # 标签
+    labels:
+      - "com.mtproxy.haproxy=true"
+      - "com.mtproxy.proxy-protocol=enabled"
+
+  # MTProxy白名单服务 - 后端服务
+  mtproxy-whitelist:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: mtproxy-whitelist
+    restart: unless-stopped
+    
+    # NAT模式：使用host网络模式，避免端口映射
+    network_mode: host
+    
+    # 环境变量配置
+    environment:
+      - MTPROXY_DOMAIN=${MTPROXY_DOMAIN:-azure.microsoft.com}
+      - MTPROXY_TAG=${MTPROXY_TAG:-}
+      - SECRET_KEY=${SECRET_KEY:-ee004d64da8e145b8daa35a2012e220e}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - MTPROXY_PORT=${MTPROXY_PORT:-14202}     # 外部端口（HAProxy监听）
+      - INTERNAL_MTPROXY_PORT=444               # MTProxy实际运行端口
+      - WEB_PORT=${WEB_PORT:-8787}              # Web管理端口
+      - API_PORT=8080                           # API内部端口
+      - NAT_MODE=true                           # NAT模式启用
+      - NGINX_STREAM_PORT=${MTPROXY_PORT:-14202}    # nginx stream端口（与HAProxy后端对应）
+      - NGINX_WEB_PORT=${WEB_PORT:-8787}            # nginx web端口
+      - HAPROXY_ENABLED=true                    # 启用HAProxy支持
+      - PROXY_PROTOCOL_PORT=14203               # PROXY Protocol专用端口
+    
+    # 数据卷挂载
+    volumes:
+      - mtproxy_data:/data
+      - mtproxy_logs:/var/log
+      - mtproxy_config:/opt/mtproxy
+    
+    # 健康检查 - NAT模式使用动态端口
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:${WEB_PORT:-8787}/health || curl -f http://127.0.0.1:${WEB_PORT:-8787}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    
+    # 安全配置
+    security_opt:
+      - no-new-privileges:true
+    
+    # 临时文件系统挂载
+    tmpfs:
+      - /tmp:size=100M,noexec,nosuid,nodev
+      - /var/run:size=100M,noexec,nosuid,nodev
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # 添加标签用于识别
+    labels:
+      - "traefik.enable=false"
+      - "com.mtproxy.whitelist=true"
+      - "com.mtproxy.version=4.0"
+      - "com.mtproxy.mode=nat"
+      - "com.mtproxy.haproxy=backend"
+      - "com.mtproxy.proxy-protocol=enabled"
+
+# 数据卷定义
+volumes:
+  mtproxy_data:
+    driver: local
+  mtproxy_logs:
+    driver: local  
+  mtproxy_config:
+    driver: local
+  haproxy_logs:
+    driver: local

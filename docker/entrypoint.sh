@@ -47,12 +47,21 @@ echo "   NGINX_WEB_PORT=$NGINX_WEB_PORT"
 
 echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_PORT}"
 
-# 根据NAT模式配置nginx监听端口
+# 根据NAT模式和HAProxy配置nginx监听端口
 if [ "${NAT_MODE:-false}" = "true" ]; then
-    echo "🔧 NAT模式：nginx直接监听外部端口 ${MTPROXY_PORT}(stream) 和 ${WEB_PORT}(web)"
-    # NAT模式：nginx直接监听用户配置的外部端口
-    export NGINX_STREAM_PORT=${MTPROXY_PORT}
-    export NGINX_WEB_PORT=${WEB_PORT}
+    if [ "${HAPROXY_ENABLED:-false}" = "true" ]; then
+        echo "🔧 NAT+HAProxy模式：nginx监听内部端口，HAProxy处理外部连接"
+        # HAProxy模式：nginx监听内部端口，HAProxy转发外部流量
+        export NGINX_STREAM_PORT=${MTPROXY_PORT}      # 标准端口（直连备用）
+        export NGINX_WEB_PORT=${WEB_PORT}             # Web端口
+        echo "   HAProxy监听: ${MTPROXY_PORT}(外部) -> nginx:14203(PROXY Protocol)"
+        echo "   nginx监听: ${NGINX_STREAM_PORT}(标准) + 14203(PROXY Protocol)"
+    else
+        echo "🔧 NAT模式：nginx直接监听外部端口 ${MTPROXY_PORT}(stream) 和 ${WEB_PORT}(web)"
+        # 传统NAT模式：nginx直接监听用户配置的外部端口
+        export NGINX_STREAM_PORT=${MTPROXY_PORT}
+        export NGINX_WEB_PORT=${WEB_PORT}
+    fi
 else
     echo "🔧 Bridge模式：nginx监听内部端口 443(stream) 和 8888(web)"
     # Bridge模式：nginx监听固定内部端口，Docker负责端口映射
