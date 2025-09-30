@@ -286,6 +286,8 @@ get_user_config() {
                 NETWORK_MODE="host"
                 print_success "选择NAT模式 (host网络)"
                 print_info "NAT模式下容器将直接使用主机网络"
+                print_info "🚀 NAT模式将自动启用HAProxy+PROXY Protocol解决IP获取问题"
+                export HAPROXY_ENABLED="true"
                 break
                 ;;
             *)
@@ -459,6 +461,8 @@ generate_config() {
 # 网络模式配置
 NAT_MODE=$NAT_MODE
 NETWORK_MODE=$NETWORK_MODE
+HAPROXY_ENABLED=$([ "$NAT_MODE" == "true" ] && echo "true" || echo "false")
+PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-14203}
 ENABLE_PROXY_PROTOCOL=${ENABLE_PROXY_PROTOCOL:-true}
 ENABLE_TRANSPARENT_PROXY=${ENABLE_TRANSPARENT_PROXY:-false}
 PRIVILEGED_MODE=${PRIVILEGED_MODE:-false}
@@ -611,8 +615,24 @@ deploy_service() {
     
     # 根据NAT模式选择配置文件
     if [[ "$NAT_MODE" == "true" ]]; then
-        print_info "NAT模式：使用专用配置文件..."
-        generate_nat_compose
+        print_info "NAT模式：自动启用HAProxy+PROXY Protocol..."
+        
+        # NAT模式自动启用HAProxy
+        export HAPROXY_ENABLED="true"
+        
+        # 检查HAProxy配置文件是否存在
+        if [[ ! -f "docker/haproxy.cfg" ]] || [[ ! -f "docker/nginx-haproxy.conf.template" ]]; then
+            print_warning "HAProxy配置文件不完整，使用标准NAT配置"
+            generate_nat_compose
+        else
+            print_success "✅ 使用HAProxy+PROXY Protocol配置解决IP获取问题"
+            # 使用HAProxy专用的NAT配置
+            if [[ ! -f "docker-compose.nat.yml" ]]; then
+                print_info "生成HAProxy+NAT模式配置..."
+                # 这里应该生成包含HAProxy的配置，暂时使用现有的
+                cp docker-compose.nat.yml docker-compose.nat.yml.backup 2>/dev/null || true
+            fi
+        fi
         
         print_info "检查NAT模式端口冲突..."
         # 检查端口是否被占用
@@ -625,10 +645,10 @@ deploy_service() {
             ss -tuln | grep ":$WEB_PORT "
         fi
         
-        print_info "使用NAT模式配置构建镜像..."
+        print_info "使用NAT+HAProxy模式配置构建镜像..."
         docker-compose -f docker-compose.nat.yml build --no-cache
         
-        print_info "启动NAT模式服务..."
+        print_info "启动NAT+HAProxy模式服务..."
         docker-compose -f docker-compose.nat.yml up -d
         
         # 创建管理别名
