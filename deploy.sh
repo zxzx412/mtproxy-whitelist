@@ -950,6 +950,41 @@ configure_nginx_for_network_mode() {
     print_success "nginx网络模式配置完成"
 }
 
+# 安装（确保存在）IP 诊断脚本
+ensure_diagnose_script() {
+    print_info "安装 IP 诊断脚本..."
+    if docker-compose ps | grep -q "Up"; then
+        docker-compose exec -T mtproxy-whitelist sh -c "cat > /usr/local/bin/diagnose-ip.sh << 'EOF'
+#!/bin/sh
+echo 'IP 获取诊断报告:'
+echo '================='
+echo '1. nginx 配置检查:'
+nginx -t || true
+echo ''
+echo '2. PROXY Protocol 支持:'
+grep -n \"proxy_protocol\" /etc/nginx/nginx.conf || echo '未启用 PROXY Protocol'
+echo ''
+echo '3. 最近的连接日志:'
+tail -n 10 /var/log/nginx/proxy_protocol_access.log 2>/dev/null || tail -n 10 /var/log/nginx/stream_access.log 2>/dev/null || echo '无连接日志'
+echo ''
+echo '4. 网络接口信息:'
+ip addr show | grep -E 'inet.*scope global' || true
+echo ''
+echo '5. 路由信息:'
+ip route | head -5 || true
+EOF
+chmod +x /usr/local/bin/diagnose-ip.sh" 2>/dev/null || print_warning "写入诊断脚本失败"
+        # 再次确认存在
+        if docker-compose exec -T mtproxy-whitelist test -f /usr/local/bin/diagnose-ip.sh 2>/dev/null; then
+            print_success "IP 诊断脚本已安装"
+        else
+            print_warning "IP 诊断脚本仍未安装"
+        fi
+    else
+        print_warning "容器未运行，跳过诊断脚本安装"
+    fi
+}
+
 # NAT 环境 IP 获取增强功能
 enable_proxy_protocol() {
     print_info "启用 PROXY Protocol 支持..."
@@ -1237,11 +1272,8 @@ print_haproxy_debug_logs() {
         local status_line
         status_line=$(docker ps -a --format '{{.Names}} {{.Status}}' | awk '/^mtproxy-haproxy /{sub($1" ", ""); print}')
         print_info "mtproxy-haproxy 状态: ${status_line}"
-        if command -v docker-compose >/dev/null 2>&1 && [[ -f "docker-compose.nat.yml" ]]; then
-            docker-compose -f docker-compose.nat.yml logs --tail=200 mtproxy-haproxy || docker logs --tail=200 mtproxy-haproxy || true
-        else
-            docker logs --tail=200 mtproxy-haproxy || true
-        fi
+        # 统一使用 docker logs，避免 no such service: mtproxy-haproxy
+        docker logs --tail=200 mtproxy-haproxy || true
         if docker ps -a --format '{{.Names}} {{.Status}}' | grep -E '^mtproxy-haproxy .*Restarting' >/dev/null 2>&1; then
             print_warning "HAProxy 容器处于 Restarting 状态，请检查："
             print_warning "  - /tmp/haproxy.cfg 是否生成且有效（docker exec mtproxy-haproxy cat /tmp/haproxy.cfg）"
@@ -1600,6 +1632,9 @@ main() {
         
         # 修复 NAT 环境 IP 获取
         fix_nat_ip
+
+        # 确保诊断脚本存在
+        ensure_diagnose_script
         
         # 测试 NAT IP 获取功能
         test_nat_ip_function
