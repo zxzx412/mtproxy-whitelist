@@ -29,7 +29,7 @@ services:
     
     # 健康检查
     healthcheck:
-      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      test: ["CMD", "haproxy", "-c", "-f", "/tmp/haproxy.cfg"]
       interval: 30s
       timeout: 10s
       retries: 3

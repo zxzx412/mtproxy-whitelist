@@ -181,11 +181,22 @@ wait_mobile_and_evaluate() {
 
 main() {
   if [[ "${1:-}" == "--help" ]]; then
-    echo "用法: $0 [--wait-mobile]"
+    echo "用法: $0 [--wait-mobile] [--ignore-gost]"
     echo "  无参数: 执行一次性诊断"
     echo "  --wait-mobile: 进入移动网络直连监控模式，抓取新日志并评估真实IP"
+    echo "  --ignore-gost: 跳过 gost 检查"
     exit 0
   fi
+
+  # 参数解析
+  WAIT_MOBILE="false"
+  IGNORE_GOST="false"
+  for arg in "$@"; do
+    case "$arg" in
+      --wait-mobile) WAIT_MOBILE="true" ;;
+      --ignore-gost) IGNORE_GOST="true" ;;
+    esac
+  done
 
   log_info "开始 NAT/真实IP诊断"
   local pub_ip
@@ -193,7 +204,11 @@ main() {
   log_info "检测到公网IP: ${pub_ip}"
 
   check_haproxy_listen
-  check_gost_presence
+  if [[ "$IGNORE_GOST" != "true" ]]; then
+    check_gost_presence
+  else
+    log_warn "已忽略 gost 检查（按 --ignore-gost 指定）"
+  fi
   check_nat_dnat_rules
 
   log_info "解析最近的 nginx PROXY Protocol 日志记录..."
