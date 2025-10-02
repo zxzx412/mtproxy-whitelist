@@ -37,4 +37,4 @@ fi
 
 # 启动HAProxy
 echo "启动HAProxy服务..."
-exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg -D
+exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg
