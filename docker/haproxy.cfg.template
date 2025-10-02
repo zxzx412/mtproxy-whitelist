@@ -13,9 +13,7 @@ defaults
     log global
     option tcplog
 
-# 统计页面（可选）
-stats socket /var/run/haproxy.sock mode 600 level admin
-stats timeout 2m
+
 
 # MTProxy前端 - 接收外部连接
 frontend mtproxy_frontend
@@ -23,7 +21,6 @@ frontend mtproxy_frontend
     mode tcp
     
     # 记录连接信息
-    capture request header Host len 32
     
     # 转发到nginx PROXY Protocol端口
     default_backend mtproxy_backend
@@ -33,6 +30,6 @@ backend mtproxy_backend
     mode tcp
     balance roundrobin
     
-    # 启用PROXY Protocol v1，向nginx传递真实客户端IP
-    server nginx1 127.0.0.1:${PROXY_PROTOCOL_PORT} send-proxy check
+    # 启用PROXY Protocol v2，向nginx传递真实客户端IP
+    server nginx1 127.0.0.1:${PROXY_PROTOCOL_PORT} send-proxy-v2 check
     
