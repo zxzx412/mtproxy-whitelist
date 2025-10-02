@@ -1639,15 +1639,7 @@ main() {
         # 测试 NAT IP 获取功能
         test_nat_ip_function
         
-        # 清理可能存在的HAProxy容器（清理前输出一次日志以便调试）
-        if docker ps -a --format '{{.Names}}' | grep -q '^mtproxy-haproxy$'; then
-            print_info "清理HAProxy容器前输出调试日志（最后200行）..."
-            print_haproxy_debug_logs
-            print_info "清理旧的HAProxy容器..."
-            docker stop mtproxy-haproxy >/dev/null 2>&1 || true
-            docker rm mtproxy-haproxy >/dev/null 2>&1 || true
-            print_success "HAProxy容器已清理"
-        fi
+
         
         print_success "NAT环境IP获取增强：客户端 → nginx(${MTPROXY_PORT}) → MTProxy(444)"
     else
