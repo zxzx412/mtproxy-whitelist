@@ -688,6 +688,10 @@ deploy_service() {
         else
             print_warning "⚠️  Web管理端口 $WEB_PORT 未监听"
         fi
+
+        # 输出 HAProxy 调试日志（最后200行）
+        print_info "HAProxy 调试日志（最后200行）..."
+        print_haproxy_debug_logs
         
     else
         print_info "Bridge模式：使用专用配置文件..."
@@ -1227,6 +1231,28 @@ get_compose_cmd() {
     fi
 }
 
+# 打印 HAProxy 调试日志（若容器存在）
+print_haproxy_debug_logs() {
+    if docker ps -a --format '{{.Names}}' | grep -q '^mtproxy-haproxy$'; then
+        local status_line
+        status_line=$(docker ps -a --format '{{.Names}} {{.Status}}' | awk '/^mtproxy-haproxy /{sub($1" ", ""); print}')
+        print_info "mtproxy-haproxy 状态: ${status_line}"
+        if command -v docker-compose >/dev/null 2>&1 && [[ -f "docker-compose.nat.yml" ]]; then
+            docker-compose -f docker-compose.nat.yml logs --tail=200 mtproxy-haproxy || docker logs --tail=200 mtproxy-haproxy || true
+        else
+            docker logs --tail=200 mtproxy-haproxy || true
+        fi
+        if docker ps -a --format '{{.Names}} {{.Status}}' | grep -E '^mtproxy-haproxy .*Restarting' >/dev/null 2>&1; then
+            print_warning "HAProxy 容器处于 Restarting 状态，请检查："
+            print_warning "  - /tmp/haproxy.cfg 是否生成且有效（docker exec mtproxy-haproxy cat /tmp/haproxy.cfg）"
+            print_warning "  - 端口是否冲突（ss -tuln | grep -E ':(14202|445)'）"
+            print_warning "  - 配置校验：docker exec mtproxy-haproxy haproxy -c -f /tmp/haproxy.cfg"
+        fi
+    else
+        print_info "未检测到 mtproxy-haproxy 容器，跳过 HAProxy 日志输出"
+    fi
+}
+
 # 强制重建功能
 force_rebuild() {
     print_info "🔧 强制重建 MTProxy 白名单系统..."
@@ -1578,8 +1604,10 @@ main() {
         # 测试 NAT IP 获取功能
         test_nat_ip_function
         
-        # 清理可能存在的HAProxy容器
+        # 清理可能存在的HAProxy容器（清理前输出一次日志以便调试）
         if docker ps -a --format '{{.Names}}' | grep -q '^mtproxy-haproxy$'; then
+            print_info "清理HAProxy容器前输出调试日志（最后200行）..."
+            print_haproxy_debug_logs
             print_info "清理旧的HAProxy容器..."
             docker stop mtproxy-haproxy >/dev/null 2>&1 || true
             docker rm mtproxy-haproxy >/dev/null 2>&1 || true
@@ -1982,6 +2010,23 @@ deploy_haproxy_mode() {
     # 检查容器状态
     print_info "检查容器状态..."
     docker-compose -f docker-compose.nat.yml ps
+
+    # 8.1 输出 HAProxy 容器日志（最后200行）用于调试
+    print_info "HAProxy 调试日志（最后200行）..."
+    if docker-compose -f docker-compose.nat.yml ps | grep -q "mtproxy-haproxy"; then
+        # 优先通过 compose 打印
+        docker-compose -f docker-compose.nat.yml logs --tail=200 mtproxy-haproxy || docker logs --tail=200 mtproxy-haproxy || true
+    else
+        # 回退到 docker logs
+        docker logs --tail=200 mtproxy-haproxy || true
+    fi
+    # 如果容器处于 Restarting，提示附加信息
+    if docker ps -a --format '{{.Names}} {{.Status}}' | grep -E '^mtproxy-haproxy .*Restarting' >/dev/null 2>&1; then
+        print_warning "HAProxy 容器处于 Restarting 状态，请检查以下项："
+        print_warning "  - /tmp/haproxy.cfg 是否已生成且内容正确（容器内: cat /tmp/haproxy.cfg）"
+        print_warning "  - 端口是否冲突（宿主机: ss -tuln | grep -E ':(14202|445)'）"
+        print_warning "  - haproxy 配置校验：docker exec mtproxy-haproxy haproxy -c -f /tmp/haproxy.cfg"
+    fi
     
     # 检查端口监听
     print_info "检查端口监听状态..."
