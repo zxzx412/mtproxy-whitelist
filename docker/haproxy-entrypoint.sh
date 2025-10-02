@@ -13,10 +13,14 @@ echo "  MTProxy端口: ${MTPROXY_PORT}"
 echo "  Web端口: ${WEB_PORT}"
 echo "  PROXY Protocol端口: ${PROXY_PROTOCOL_PORT}"
 
-# 如果存在模板文件，则进行环境变量替换
+# 如果存在模板文件，则进行变量替换（使用 sed，避免依赖 envsubst）
 if [ -f "/usr/local/etc/haproxy/haproxy.cfg.template" ]; then
     echo "使用模板文件生成HAProxy配置..."
-    envsubst < /usr/local/etc/haproxy/haproxy.cfg.template > /usr/local/etc/haproxy/haproxy.cfg
+    sed -e "s|\${MTPROXY_PORT}|${MTPROXY_PORT}|g" \
+        -e "s|\${WEB_PORT}|${WEB_PORT}|g" \
+        -e "s|\${NGINX_WEB_PORT}|${NGINX_WEB_PORT}|g" \
+        -e "s|\${PROXY_PROTOCOL_PORT}|${PROXY_PROTOCOL_PORT}|g" \
+        /usr/local/etc/haproxy/haproxy.cfg.template > /usr/local/etc/haproxy/haproxy.cfg
     echo "HAProxy配置文件已生成"
 fi
 
