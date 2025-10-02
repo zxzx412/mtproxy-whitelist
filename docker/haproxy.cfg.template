@@ -36,13 +36,3 @@ backend mtproxy_backend
     # 启用PROXY Protocol v1，向nginx传递真实客户端IP
     server nginx1 127.0.0.1:${PROXY_PROTOCOL_PORT} send-proxy check
     
-# Web管理界面前端（直接转发，不需要PROXY Protocol）
-frontend web_frontend
-    bind *:${WEB_PORT}
-    mode tcp
-    default_backend web_backend
-
-# Web管理界面后端
-backend web_backend
-    mode tcp
-    server nginx_web 127.0.0.1:${NGINX_WEB_PORT} check
