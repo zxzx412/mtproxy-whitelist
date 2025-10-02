@@ -20,13 +20,13 @@ if [ -f "/usr/local/etc/haproxy/haproxy.cfg.template" ]; then
         -e "s|\${WEB_PORT}|${WEB_PORT}|g" \
         -e "s|\${NGINX_WEB_PORT}|${NGINX_WEB_PORT}|g" \
         -e "s|\${PROXY_PROTOCOL_PORT}|${PROXY_PROTOCOL_PORT}|g" \
-        /usr/local/etc/haproxy/haproxy.cfg.template > /usr/local/etc/haproxy/haproxy.cfg
-    echo "HAProxy配置文件已生成"
+        /usr/local/etc/haproxy/haproxy.cfg.template > /tmp/haproxy.cfg
+    echo "HAProxy配置文件已生成: /tmp/haproxy.cfg"
 fi
 
 # 验证配置文件
 echo "验证HAProxy配置..."
-haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+haproxy -c -f /tmp/haproxy.cfg
 
 if [ $? -eq 0 ]; then
     echo "✅ HAProxy配置验证通过"
@@ -37,4 +37,4 @@ fi
 
 # 启动HAProxy
 echo "启动HAProxy服务..."
-exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg
+exec haproxy -f /tmp/haproxy.cfg
