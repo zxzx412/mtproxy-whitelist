@@ -17,11 +17,11 @@ defaults
 
 # MTProxy前端 - 接收外部连接
 frontend mtproxy_frontend
-    bind *:${MTPROXY_PORT}
+    bind *:${EXTERNAL_PROXY_PORT}
     mode tcp
-    
+
     # 记录连接信息
-    
+
     # 转发到nginx PROXY Protocol端口
     default_backend mtproxy_backend
 
@@ -29,7 +29,7 @@ frontend mtproxy_frontend
 backend mtproxy_backend
     mode tcp
     balance roundrobin
-    
+
     # 启用PROXY Protocol v2，向nginx传递真实客户端IP
-    server nginx1 127.0.0.1:${PROXY_PROTOCOL_PORT} send-proxy-v2 check
+    server nginx1 127.0.0.1:${INTERNAL_PROXY_PROTOCOL_PORT} send-proxy-v2 check
     
