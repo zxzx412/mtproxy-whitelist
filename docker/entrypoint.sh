@@ -1,99 +1,139 @@
 #!/bin/bash
 set -e
 
-echo "🚀 MTProxy 白名单系统 v4.0"
+echo "🚀 MTProxy 白名单系统 v5.0 (重构版)"
 echo "=========================================="
 
-# 初始化配置
-CONFIG_FILE="/opt/mtproxy/mtp_config"
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "生成初始配置..."
-    SECRET=$(openssl rand -hex 16)
-    PUBLIC_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "127.0.0.1")
-    DOMAIN=${MTPROXY_DOMAIN:-"azure.microsoft.com"}
-    PORT=${MTPROXY_PORT:-444}
-    echo "secret=\"$SECRET\"" > "$CONFIG_FILE"
-    echo "domain=\"$DOMAIN\"" >> "$CONFIG_FILE"
-    echo "PUBLIC_IP=\"$PUBLIC_IP\"" >> "$CONFIG_FILE"
-    echo "MTPROXY_PORT=$PORT" >> "$CONFIG_FILE"
-    echo "配置文件已生成: $CONFIG_FILE"
-fi
+# ===== 阶段1: 变量别名处理（向后兼容） =====
+handle_legacy_vars() {
+    echo "🔄 检查向后兼容性..."
 
-# 初始化nginx配置
-mkdir -p /etc/nginx/conf.d /data/nginx
-
-# 强制加载环境变量（解决 docker-compose 传递问题）
-echo "🔧 检查环境变量..."
-if [ -z "$MTPROXY_PORT" ] || [ -z "$WEB_PORT" ]; then
-    echo "⚠️  环境变量未设置，使用默认值"
-fi
-
-# 设置默认端口值（防止环境变量未设置）
-export WEB_PORT=${WEB_PORT:-8989}
-export MTPROXY_PORT=${MTPROXY_PORT:-14202}
-export NGINX_WEB_PORT=${NGINX_WEB_PORT:-${WEB_PORT}}
-export NGINX_STREAM_PORT=${NGINX_STREAM_PORT:-${MTPROXY_PORT}}
-export NAT_MODE=${NAT_MODE:-true}
-export NETWORK_MODE=${NETWORK_MODE:-host}
-
-# 调试：显示关键环境变量
-echo "🔍 环境变量检查："
-echo "   NAT_MODE=$NAT_MODE"
-echo "   NETWORK_MODE=$NETWORK_MODE"
-echo "   MTPROXY_PORT=$MTPROXY_PORT"
-echo "   WEB_PORT=$WEB_PORT"
-echo "   NGINX_STREAM_PORT=$NGINX_STREAM_PORT"
-echo "   NGINX_WEB_PORT=$NGINX_WEB_PORT"
-
-echo "开始生成nginx配置，WEB_PORT=${WEB_PORT}, MTPROXY_PORT=${MTPROXY_PORT}"
-
-# 根据NAT模式和HAProxy配置nginx监听端口
-if [ "${NAT_MODE:-false}" = "true" ]; then
-    if [ "${HAPROXY_ENABLED:-false}" = "true" ]; then
-        echo "🔧 NAT+HAProxy模式：nginx避开外部端口，防止与HAProxy冲突"
-        # HAProxy模式：nginx使用内部端口，避免与HAProxy的外部端口冲突
-        export NGINX_STREAM_PORT=14204           # 内部端口，避免与HAProxy:14202冲突
-        export NGINX_WEB_PORT=${WEB_PORT}        # Web端口
-        echo "   HAProxy监听: ${MTPROXY_PORT}(外部) -> nginx:445(PROXY Protocol)"
-        echo "   nginx监听: ${NGINX_STREAM_PORT}(内部备用) + 445(PROXY Protocol主要)"
-        echo "   ⚠️  客户端必须连接HAProxy端口${MTPROXY_PORT}，不能直连nginx"
-    else
-        echo "🔧 NAT模式：nginx直接监听外部端口 ${MTPROXY_PORT}(stream) 和 ${WEB_PORT}(web)"
-        # 传统NAT模式：nginx直接监听用户配置的外部端口
-        export NGINX_STREAM_PORT=${MTPROXY_PORT}
-        export NGINX_WEB_PORT=${WEB_PORT}
+    # MTPROXY_PORT → EXTERNAL_PROXY_PORT
+    if [ -n "$MTPROXY_PORT" ]; then
+        echo "⚠️  警告: MTPROXY_PORT已废弃，请使用EXTERNAL_PROXY_PORT"
+        export EXTERNAL_PROXY_PORT="${EXTERNAL_PROXY_PORT:-$MTPROXY_PORT}"
     fi
-else
-    echo "🔧 Bridge模式：nginx监听内部端口 443(stream) 和 8888(web)"
-    # Bridge模式：nginx监听固定内部端口，Docker负责端口映射
-    export NGINX_STREAM_PORT=443
-    export NGINX_WEB_PORT=8888
-fi
 
-# 设置PROXY Protocol端口
-export PROXY_PROTOCOL_PORT=${PROXY_PROTOCOL_PORT:-445}
+    # WEB_PORT → EXTERNAL_WEB_PORT
+    if [ -n "$WEB_PORT" ]; then
+        echo "⚠️  警告: WEB_PORT已废弃，请使用EXTERNAL_WEB_PORT"
+        export EXTERNAL_WEB_PORT="${EXTERNAL_WEB_PORT:-$WEB_PORT}"
+    fi
 
-# 根据HAProxy模式选择nginx配置模板
-if [ "${HAPROXY_ENABLED:-false}" = "true" ]; then
-    echo "🔧 使用HAProxy专用nginx配置模板"
-    echo "   PROXY Protocol端口: ${PROXY_PROTOCOL_PORT}"
-    # HAProxy模式：使用专用配置，只监听PROXY Protocol端口
-    envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT $NGINX_WEB_PORT $PROXY_PROTOCOL_PORT' < /etc/nginx/nginx-haproxy.conf.template > /etc/nginx/nginx.conf
-else
-    echo "🔧 使用标准nginx配置模板"
-    # 标准模式：使用通用配置
-    envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT $NGINX_WEB_PORT $PROXY_PROTOCOL_PORT' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
-fi
+    # 端口445废弃警告
+    if [ "${PROXY_PROTOCOL_PORT:-}" = "445" ]; then
+        echo "⚠️  警告: 端口445已废弃（Windows SMB冲突），自动改用14445"
+        export INTERNAL_PROXY_PROTOCOL_PORT=14445
+    fi
 
-echo "nginx配置文件内容预览："
-head -20 /etc/nginx/nginx.conf
+    # 设置默认值
+    export EXTERNAL_PROXY_PORT="${EXTERNAL_PROXY_PORT:-14202}"
+    export EXTERNAL_WEB_PORT="${EXTERNAL_WEB_PORT:-8989}"
+    export INTERNAL_PROXY_PROTOCOL_PORT="${INTERNAL_PROXY_PROTOCOL_PORT:-14445}"
+    export BACKEND_MTPROXY_PORT="${BACKEND_MTPROXY_PORT:-444}"
+    export INTERNAL_API_PORT="${INTERNAL_API_PORT:-8080}"
 
-# 显示stream配置部分
-echo "nginx stream配置预览："
-grep -A 10 "listen.*;" /etc/nginx/nginx.conf | head -15
+    # 向后兼容：保留旧变量名（供其他脚本使用）
+    export MTPROXY_PORT="${EXTERNAL_PROXY_PORT}"
+    export WEB_PORT="${EXTERNAL_WEB_PORT}"
+}
 
-# 初始化白名单文件和映射（确保无重复）
-cat > /data/nginx/whitelist.txt << 'EOF'
+# ===== 阶段2: 加载部署策略 =====
+load_strategy() {
+    # 兼容旧的NAT_MODE变量
+    if [ -n "$NAT_MODE" ] && [ -z "$DEPLOYMENT_MODE" ]; then
+        if [ "$NAT_MODE" = "true" ]; then
+            if [ "${HAPROXY_ENABLED:-false}" = "true" ]; then
+                export DEPLOYMENT_MODE="nat-haproxy"
+            else
+                export DEPLOYMENT_MODE="nat-direct"
+            fi
+        else
+            export DEPLOYMENT_MODE="bridge"
+        fi
+        echo "⚠️  警告: NAT_MODE已废弃，自动转换为DEPLOYMENT_MODE=${DEPLOYMENT_MODE}"
+    fi
+
+    local mode="${DEPLOYMENT_MODE:-bridge}"
+    local strategy_file="/etc/mtproxy/strategies/${mode}.conf"
+
+    if [ ! -f "$strategy_file" ]; then
+        echo "❌ 错误：策略文件不存在 $strategy_file"
+        echo "支持的模式: bridge, nat-direct, nat-haproxy"
+        exit 1
+    fi
+
+    echo "🔧 加载部署策略: $mode"
+    source "$strategy_file"
+
+    # 显示策略配置
+    echo "   策略名称: $STRATEGY_NAME"
+    echo "   网络模式: $NETWORK_MODE"
+    echo "   HAProxy: $HAPROXY_ENABLED"
+    echo "   Nginx Stream端口: $INTERNAL_NGINX_STREAM_PORT"
+    echo "   Nginx Web端口: $INTERNAL_NGINX_WEB_PORT"
+}
+
+# ===== 阶段3: 验证配置 =====
+validate_config() {
+    echo "✓ 验证配置..."
+
+    # 验证端口范围
+    local ports=(
+        "EXTERNAL_PROXY_PORT:${EXTERNAL_PROXY_PORT}"
+        "EXTERNAL_WEB_PORT:${EXTERNAL_WEB_PORT}"
+        "INTERNAL_PROXY_PROTOCOL_PORT:${INTERNAL_PROXY_PROTOCOL_PORT}"
+        "BACKEND_MTPROXY_PORT:${BACKEND_MTPROXY_PORT}"
+    )
+
+    for port_spec in "${ports[@]}"; do
+        local name="${port_spec%%:*}"
+        local value="${port_spec#*:}"
+
+        if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+            echo "❌ 错误: $name=$value 超出有效范围(1-65535)"
+            exit 1
+        fi
+    done
+
+    echo "   ✓ 端口配置验证通过"
+
+    # 验证必需配置
+    if [ -z "$MTPROXY_DOMAIN" ]; then
+        echo "⚠️  警告: MTPROXY_DOMAIN未设置，使用默认值 azure.microsoft.com"
+        export MTPROXY_DOMAIN="azure.microsoft.com"
+    fi
+
+    echo "   ✓ 业务配置验证通过"
+}
+
+# ===== 阶段4: 初始化配置 =====
+initialize_configs() {
+    echo "🔧 初始化配置文件..."
+
+    # 初始化MTProxy配置
+    CONFIG_FILE="/opt/mtproxy/mtp_config"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "生成MTProxy配置..."
+        SECRET=$(openssl rand -hex 16)
+        PUBLIC_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "127.0.0.1")
+        DOMAIN=${MTPROXY_DOMAIN:-"azure.microsoft.com"}
+
+        cat > "$CONFIG_FILE" << EOF
+secret="$SECRET"
+domain="$DOMAIN"
+PUBLIC_IP="$PUBLIC_IP"
+MTPROXY_PORT=$EXTERNAL_PROXY_PORT
+EOF
+        echo "   ✓ MTProxy配置已生成"
+    fi
+
+    # 初始化nginx目录
+    mkdir -p /etc/nginx/conf.d /data/nginx
+
+    # 初始化白名单文件
+    if [ ! -f /data/nginx/whitelist.txt ]; then
+        cat > /data/nginx/whitelist.txt << 'EOF'
 # MTProxy 白名单配置文件
 # 每行一个IP地址或CIDR网段
 
@@ -101,160 +141,240 @@ cat > /data/nginx/whitelist.txt << 'EOF'
 127.0.0.1
 ::1
 EOF
+        echo "   ✓ 白名单文件已初始化"
+    fi
 
-# 生成nginx白名单映射配置
-echo "生成nginx白名单映射配置..."
-/usr/local/bin/generate-whitelist-map.sh generate
-
-# 检测和配置NAT环境
-echo "检测NAT环境配置..."
-if [ "${NAT_MODE:-false}" = "true" ]; then
-    echo "🔍 检测到NAT模式，启用IP获取增强功能"
-    
-    echo "🔧 配置NAT环境白名单..."
-    
-    # NAT模式下的IP获取优化（内置实现）
-    echo "🔧 配置NAT环境IP获取优化..."
-    
-    # 重新生成干净的白名单文件（NAT模式）
-    cat > /data/nginx/whitelist.txt << 'EOF'
-# MTProxy 白名单配置文件 - NAT模式
-# 每行一个IP地址或CIDR网段
-
-# === NAT环境IP获取优化 ===
-# 本地回环地址
-127.0.0.1
-::1
-
-# 常见内网段（根据实际需要调整）
-# 10.0.0.0/8
-# 172.16.0.0/12  
-# 192.168.0.0/16
-EOF
-    
-    # 重新生成白名单映射
+    # 生成白名单映射
     /usr/local/bin/generate-whitelist-map.sh generate
-    
-    echo "✅ NAT环境IP获取功能配置完成"
-    echo "🌐 支持PROXY Protocol和真实IP获取"
-    echo "📊 可使用以下命令监控IP获取状态："
-    echo "   - analyze-nat-ips.sh     # 分析IP连接"
-    echo "   - monitor-client-ips.sh  # 实时监控"
-    echo "   - diagnose-ip.sh         # 运行诊断"
-else
-    echo "🔍 标准模式，使用基础IP获取"
-    # 重新生成干净的白名单文件（标准模式）
-    cat > /data/nginx/whitelist.txt << 'EOF'
-# MTProxy 白名单配置文件 - 标准模式
-# 每行一个IP地址或CIDR网段
+    echo "   ✓ 白名单映射已生成"
+}
 
-# === 标准环境基础配置 ===
-# 本地回环地址
-127.0.0.1
-::1
+# ===== 阶段5: 生成配置文件 =====
+generate_configs() {
+    echo "🔧 生成配置文件..."
+
+    # 设置环境变量供模板使用
+    export NGINX_STREAM_PORT="$INTERNAL_NGINX_STREAM_PORT"
+    export NGINX_WEB_PORT="$INTERNAL_NGINX_WEB_PORT"
+    export PROXY_PROTOCOL_PORT="$INTERNAL_PROXY_PROTOCOL_PORT"
+
+    # 生成nginx配置
+    echo "   生成nginx配置: $NGINX_TEMPLATE"
+    envsubst '$WEB_PORT $MTPROXY_PORT $NGINX_STREAM_PORT $NGINX_WEB_PORT $PROXY_PROTOCOL_PORT $EXTERNAL_PROXY_PORT $EXTERNAL_WEB_PORT $INTERNAL_PROXY_PROTOCOL_PORT' \
+        < "/etc/nginx/templates/$NGINX_TEMPLATE" \
+        > /etc/nginx/nginx.conf
+
+    # 验证nginx配置
+    if ! nginx -t 2>&1 | tee /tmp/nginx-test.log; then
+        echo "❌ nginx配置验证失败"
+        cat /tmp/nginx-test.log
+        exit 1
+    fi
+    echo "   ✓ nginx配置验证通过"
+
+    # 如果启用HAProxy，生成HAProxy配置
+    if [ "$HAPROXY_ENABLED" = "true" ]; then
+        echo "   生成HAProxy配置"
+        envsubst '$MTPROXY_PORT $PROXY_PROTOCOL_PORT $EXTERNAL_PROXY_PORT $INTERNAL_PROXY_PROTOCOL_PORT' \
+            < /etc/haproxy/haproxy.cfg.template \
+            > /etc/haproxy/haproxy.cfg
+        echo "   ✓ HAProxy配置已生成"
+    fi
+}
+
+# ===== 阶段6: 启动服务 =====
+start_services() {
+    echo "🚀 启动服务..."
+
+    # 检查是否使用Supervisor
+    if command -v supervisord >/dev/null 2>&1 && [ -f /etc/supervisor/supervisord.conf ]; then
+        echo "   使用Supervisor管理进程"
+
+        # 如果HAProxy启用，确保HAProxy程序配置存在
+        if [ "$HAPROXY_ENABLED" = "true" ]; then
+            if [ ! -f /etc/supervisor/conf.d/haproxy.conf ]; then
+                cat > /etc/supervisor/conf.d/haproxy.conf << 'EOF'
+[program:haproxy]
+command=/usr/sbin/haproxy -f /etc/haproxy/haproxy.cfg -db
+directory=/etc/haproxy
+autostart=true
+autorestart=true
+startretries=10
+startsecs=3
+redirect_stderr=true
+stdout_logfile=/var/log/haproxy/stdout.log
+priority=150
 EOF
-fi
+                echo "   ✓ HAProxy supervisor配置已生成"
+            fi
+        fi
 
-# 启动API服务
-echo "启动Flask API..."
-mkdir -p /var/log/api /var/log/mtproxy
-cd /opt/mtproxy-api
-python3 app.py > /var/log/api/stdout.log 2> /var/log/api/stderr.log &
-API_PID=$!
-echo $API_PID > /run/api.pid
-sleep 3
+        exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+    else
+        echo "   使用传统进程管理"
+        start_services_traditional
+    fi
+}
 
-# 启动MTProxy
-echo "启动MTProxy..."
-cd /opt/mtproxy
-source mtp_config
-DOMAIN_HEX=$(printf "%s" "$domain" | hexdump -ve '1/1 "%02x"')
-CLIENT_SECRET="ee${secret}${DOMAIN_HEX}"
+# 传统启动方式（向后兼容）
+start_services_traditional() {
+    # 启动API服务
+    echo "启动Flask API..."
+    mkdir -p /var/log/api /var/log/mtproxy /var/log/nginx
+    cd /opt/mtproxy-api
+    python3 app.py > /var/log/api/stdout.log 2> /var/log/api/stderr.log &
+    API_PID=$!
+    echo $API_PID > /run/api.pid
+    sleep 3
 
-# 根据NAT模式选择正确的IP和端口配置
-if [ "${NAT_MODE:-false}" = "true" ]; then
-    # NAT模式：使用主机IP和主机网络，直接绑定用户配置的端口
-    ADVERTISED_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || hostname -I | cut -d' ' -f1)
-    ADVERTISED_PORT=${MTPROXY_PORT}
-    echo "NAT模式: 广告IP=${ADVERTISED_IP}, 广告端口=${ADVERTISED_PORT} (客户端连接端口)"
-else
-    # 标准bridge模式：MTProxy绑定内部端口444，nginx转发外部端口到444
-    ADVERTISED_IP=${PUBLIC_IP}
-    ADVERTISED_PORT=${MTPROXY_PORT}
-    echo "Bridge模式: 广告IP=${ADVERTISED_IP}, 端口=${ADVERTISED_PORT}"
-fi
+    # 启动MTProxy
+    echo "启动MTProxy..."
+    /usr/local/bin/start-mtproxy.sh > /var/log/mtproxy/stdout.log 2> /var/log/mtproxy/stderr.log &
+    MTPROXY_PID=$!
+    echo $MTPROXY_PID > /run/mtproxy.pid
+    sleep 5
 
-./mtg run $CLIENT_SECRET -b 0.0.0.0:444 --multiplex-per-connection 500 -t 127.0.0.1:8081 -4 ${ADVERTISED_IP}:${ADVERTISED_PORT} > /var/log/mtproxy/stdout.log 2> /var/log/mtproxy/stderr.log &
-MTPROXY_PID=$!
-echo $MTPROXY_PID > /run/mtproxy.pid
-sleep 5
+    # 启动HAProxy（如果启用）
+    if [ "$HAPROXY_ENABLED" = "true" ]; then
+        echo "启动HAProxy..."
+        /usr/sbin/haproxy -f /etc/haproxy/haproxy.cfg -db &
+        HAPROXY_PID=$!
+        echo $HAPROXY_PID > /run/haproxy.pid
+        sleep 2
+    fi
 
-# 启动Nginx
-echo "启动Nginx..."
-nginx -t && nginx
+    # 启动Nginx
+    echo "启动Nginx..."
+    nginx
 
-# 检查服务启动状态
-echo "检查服务启动状态..."
-sleep 5
+    # 显示服务状态
+    display_service_status
 
-echo "API服务检查:"
-if kill -0 $API_PID 2>/dev/null; then
-    echo "✅ API服务运行正常 (PID: $API_PID)"
-else
-    echo "❌ API服务启动失败"
-fi
+    # 显示连接信息
+    display_connection_info
 
-echo "MTProxy服务检查:"
-if kill -0 $MTPROXY_PID 2>/dev/null; then
-    echo "✅ MTProxy服务运行正常 (PID: $MTPROXY_PID)"
-    echo "MTProxy监听端口: 444"
-    netstat -tlnp 2>/dev/null | grep ":444 " || echo "⚠️  警告：端口444未在监听"
-else
-    echo "❌ MTProxy服务启动失败"
-    echo "MTProxy日志："
-    tail -10 /var/log/mtproxy/stderr.log 2>/dev/null || echo "无法读取错误日志"
-fi
+    # 保持容器运行并监控进程
+    monitor_processes
+}
 
-echo "Nginx服务检查:"
-if pgrep nginx >/dev/null; then
-    echo "✅ Nginx服务运行正常"
-    echo "Nginx监听端口:"
-    netstat -tlnp 2>/dev/null | grep nginx | head -5
-else
-    echo "❌ Nginx服务未运行"
-fi
+# 显示服务状态
+display_service_status() {
+    echo ""
+    echo "=========================================="
+    echo "检查服务启动状态..."
+    sleep 3
 
-echo "✅ 所有服务启动完成"
+    if [ -f /run/api.pid ]; then
+        API_PID=$(cat /run/api.pid)
+        if kill -0 $API_PID 2>/dev/null; then
+            echo "✅ API服务运行正常 (PID: $API_PID)"
+        else
+            echo "❌ API服务启动失败"
+        fi
+    fi
+
+    if [ -f /run/mtproxy.pid ]; then
+        MTPROXY_PID=$(cat /run/mtproxy.pid)
+        if kill -0 $MTPROXY_PID 2>/dev/null; then
+            echo "✅ MTProxy服务运行正常 (PID: $MTPROXY_PID)"
+        else
+            echo "❌ MTProxy服务启动失败"
+        fi
+    fi
+
+    if [ "$HAPROXY_ENABLED" = "true" ] && [ -f /run/haproxy.pid ]; then
+        HAPROXY_PID=$(cat /run/haproxy.pid)
+        if kill -0 $HAPROXY_PID 2>/dev/null; then
+            echo "✅ HAProxy服务运行正常 (PID: $HAPROXY_PID)"
+        else
+            echo "❌ HAProxy服务启动失败"
+        fi
+    fi
+
+    if pgrep nginx >/dev/null; then
+        echo "✅ Nginx服务运行正常"
+    else
+        echo "❌ Nginx服务未运行"
+    fi
+
+    echo "✅ 所有服务启动完成"
+}
 
 # 显示连接信息
-echo ""
-echo "🔗 MTProxy 连接信息："
-echo "=========================================="
-source /opt/mtproxy/mtp_config
-echo "📱 连接密钥: $CLIENT_SECRET"
-echo "🌐 服务器IP: ${ADVERTISED_IP}"
-echo "🔌 服务端口: ${ADVERTISED_PORT}"
-echo ""
-echo "📋 Telegram连接链接:"
-echo "https://t.me/proxy?server=${ADVERTISED_IP}&port=${ADVERTISED_PORT}&secret=${CLIENT_SECRET}"
-echo ""
-echo "📊 管理界面: http://localhost:${WEB_PORT}"
-echo "=========================================="
+display_connection_info() {
+    echo ""
+    echo "=========================================="
+    echo "🔗 MTProxy 连接信息："
+    echo "=========================================="
 
-# 保持容器运行
-while true; do
-    sleep 30
-    # 检查进程是否存在
-    if ! kill -0 $API_PID 2>/dev/null; then
-        echo "❌ API进程已停止，重新启动容器..."
-        exit 1
+    if [ -f /opt/mtproxy/mtp_config ]; then
+        source /opt/mtproxy/mtp_config
+        DOMAIN_HEX=$(printf "%s" "$domain" | hexdump -ve '1/1 "%02x"')
+        CLIENT_SECRET="ee${secret}${DOMAIN_HEX}"
+
+        ADVERTISED_IP=$(curl -s --connect-timeout 5 https://api.ipify.org || echo "$PUBLIC_IP")
+        ADVERTISED_PORT=$EXTERNAL_PROXY_PORT
+
+        echo "📱 连接密钥: $CLIENT_SECRET"
+        echo "🌐 服务器IP: ${ADVERTISED_IP}"
+        echo "🔌 服务端口: ${ADVERTISED_PORT}"
+        echo ""
+        echo "📋 Telegram连接链接:"
+        echo "https://t.me/proxy?server=${ADVERTISED_IP}&port=${ADVERTISED_PORT}&secret=${CLIENT_SECRET}"
+        echo ""
+        echo "📊 管理界面: http://localhost:${EXTERNAL_WEB_PORT}"
+        echo "=========================================="
     fi
-    if ! kill -0 $MTPROXY_PID 2>/dev/null; then
-        echo "❌ MTProxy进程已停止，重新启动容器..."
-        exit 1
-    fi
-    if ! pgrep nginx >/dev/null; then
-        echo "❌ Nginx进程已停止，重新启动容器..."
-        exit 1
-    fi
-done
+}
+
+# 监控进程健康状态
+monitor_processes() {
+    while true; do
+        sleep 30
+
+        # 检查API进程
+        if [ -f /run/api.pid ]; then
+            API_PID=$(cat /run/api.pid)
+            if ! kill -0 $API_PID 2>/dev/null; then
+                echo "❌ API进程已停止，重新启动容器..."
+                exit 1
+            fi
+        fi
+
+        # 检查MTProxy进程
+        if [ -f /run/mtproxy.pid ]; then
+            MTPROXY_PID=$(cat /run/mtproxy.pid)
+            if ! kill -0 $MTPROXY_PID 2>/dev/null; then
+                echo "❌ MTProxy进程已停止，重新启动容器..."
+                exit 1
+            fi
+        fi
+
+        # 检查HAProxy进程
+        if [ "$HAPROXY_ENABLED" = "true" ] && [ -f /run/haproxy.pid ]; then
+            HAPROXY_PID=$(cat /run/haproxy.pid)
+            if ! kill -0 $HAPROXY_PID 2>/dev/null; then
+                echo "❌ HAProxy进程已停止，重新启动容器..."
+                exit 1
+            fi
+        fi
+
+        # 检查Nginx进程
+        if ! pgrep nginx >/dev/null; then
+            echo "❌ Nginx进程已停止，重新启动容器..."
+            exit 1
+        fi
+    done
+}
+
+# ===== 主流程 =====
+main() {
+    handle_legacy_vars
+    load_strategy
+    validate_config
+    initialize_configs
+    generate_configs
+    start_services
+}
+
+main "$@"
