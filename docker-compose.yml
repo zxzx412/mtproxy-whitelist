@@ -8,23 +8,34 @@ services:
     
     # 端口映射 - Bridge模式专用
     ports:
-      - "${MTPROXY_PORT:-14202}:443"   # 外部端口 -> nginx内部443端口
-      - "${WEB_PORT:-8989}:8888"       # 外部端口 -> nginx内部8888端口
-    
+      - "${EXTERNAL_PROXY_PORT:-14202}:443"   # 外部端口 -> nginx内部443端口
+      - "${EXTERNAL_WEB_PORT:-8989}:8888"     # 外部端口 -> nginx内部8888端口
+
     # 环境变量配置
     environment:
+      - DEPLOYMENT_MODE=bridge                           # 部署模式：bridge
       - MTPROXY_DOMAIN=${MTPROXY_DOMAIN:-azure.microsoft.com}
       - MTPROXY_TAG=${MTPROXY_TAG:-}
       - SECRET_KEY=${SECRET_KEY:-ee004d64da8e145b8daa35a2012e220e}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - MTPROXY_PORT=${MTPROXY_PORT:-14202}     # MTProxy代理端口，nginx监听此端口
-      - INTERNAL_MTPROXY_PORT=444               # MTProxy实际运行端口
-      - WEB_PORT=${WEB_PORT:-8989}              # Web管理端口变量化
-      - API_PORT=8080                           # API内部端口
-      - NAT_MODE=false                          # Bridge模式固定为false
-      - NGINX_STREAM_PORT=${NGINX_STREAM_PORT:-14202}  # nginx stream 端口
-      - NGINX_WEB_PORT=${NGINX_WEB_PORT:-8989}         # nginx web 端口
+
+      # 新端口变量标准
+      - EXTERNAL_PROXY_PORT=${EXTERNAL_PROXY_PORT:-14202}         # 外部代理端口
+      - EXTERNAL_WEB_PORT=${EXTERNAL_WEB_PORT:-8989}              # 外部Web端口
+      - BACKEND_MTPROXY_PORT=${BACKEND_MTPROXY_PORT:-444}         # MTProxy后端端口
+      - INTERNAL_API_PORT=${INTERNAL_API_PORT:-8080}              # API内部端口
+
+      # 向后兼容的端口别名
+      - MTPROXY_PORT=${EXTERNAL_PROXY_PORT:-14202}
+      - WEB_PORT=${EXTERNAL_WEB_PORT:-8989}
+      - INTERNAL_MTPROXY_PORT=${BACKEND_MTPROXY_PORT:-444}
+      - API_PORT=${INTERNAL_API_PORT:-8080}
+
+      # 遗留变量（向后兼容）
+      - NAT_MODE=false
+      - NGINX_STREAM_PORT=443
+      - NGINX_WEB_PORT=8888
     
     # 数据卷挂载
     volumes:
@@ -36,9 +47,9 @@ services:
     # NAT模式请使用 docker-compose.nat.yml 文件
     network_mode: bridge
     
-    # 健康检查 - Bridge模式使用固定内部端口
+    # 健康检查 - 使用新的多层次健康检查脚本
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:8888/health"]
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
       interval: 30s
       timeout: 10s
       retries: 3
