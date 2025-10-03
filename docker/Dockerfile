@@ -66,6 +66,10 @@ COPY docker/reload-whitelist.sh /usr/local/bin/reload-whitelist.sh
 COPY docker/generate-whitelist-map.sh /usr/local/bin/generate-whitelist-map.sh
 RUN chmod +x /usr/local/bin/reload-whitelist.sh /usr/local/bin/generate-whitelist-map.sh
 
+# 复制健康检查脚本
+COPY docker/health-check.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/health-check.sh
+
 # 设置entrypoint权限
 RUN chmod +x /entrypoint.sh
 
