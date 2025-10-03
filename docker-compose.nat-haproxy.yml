@@ -1,0 +1,134 @@
+# NAT模式 Docker Compose 配置 - 简化版
+# 使用HAProxy + PROXY Protocol解决NAT环境真实IP获取问题
+# 只暴露客户端连接端口，内部端口不对外
+
+services:
+  # HAProxy服务 - 前端代理，负责真实IP传递
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: mtproxy-haproxy
+    restart: unless-stopped
+    
+    # NAT模式：使用host网络，只监听客户端连接端口
+    network_mode: host
+    
+    # HAProxy配置文件和启动脚本
+    volumes:
+      - ./docker/haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
+      - ./docker/haproxy-entrypoint.sh:/usr/local/bin/haproxy-entrypoint.sh:ro
+      - haproxy_logs:/var/log/haproxy
+    
+    # 使用自定义启动脚本
+    entrypoint: ["/bin/sh", "/usr/local/bin/haproxy-entrypoint.sh"]
+    
+    # 环境变量 - 用于配置文件模板替换
+    environment:
+      - EXTERNAL_PROXY_PORT=${EXTERNAL_PROXY_PORT:-14202}    # 客户端连接端口（对外）
+      - EXTERNAL_WEB_PORT=${EXTERNAL_WEB_PORT:-8989}         # Web管理端口（对外）
+      - INTERNAL_PROXY_PROTOCOL_PORT=${INTERNAL_PROXY_PROTOCOL_PORT:-14445}  # 内部PROXY Protocol端口
+
+      # 向后兼容
+      - MTPROXY_PORT=${EXTERNAL_PROXY_PORT:-14202}
+      - WEB_PORT=${EXTERNAL_WEB_PORT:-8989}
+      - PROXY_PROTOCOL_PORT=${INTERNAL_PROXY_PROTOCOL_PORT:-14445}
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/tmp/haproxy.cfg"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # 依赖关系 - 等待nginx启动
+    depends_on:
+      mtproxy-whitelist:
+        condition: service_healthy
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # MTProxy白名单服务 - 后端服务（仅内部端口）
+  mtproxy-whitelist:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: mtproxy-whitelist
+    restart: unless-stopped
+    
+    # NAT模式：使用host网络模式
+    network_mode: host
+    
+    # 环境变量配置
+    environment:
+      - DEPLOYMENT_MODE=nat-haproxy                          # 部署模式：NAT+HAProxy
+      - MTPROXY_DOMAIN=${MTPROXY_DOMAIN:-azure.microsoft.com}
+      - MTPROXY_TAG=${MTPROXY_TAG:-}
+      - SECRET_KEY=${SECRET_KEY:-ee004d64da8e145b8daa35a2012e220e}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+
+      # 新端口变量标准
+      - EXTERNAL_PROXY_PORT=${EXTERNAL_PROXY_PORT:-14202}         # 外部代理端口（HAProxy监听）
+      - EXTERNAL_WEB_PORT=${EXTERNAL_WEB_PORT:-8989}              # 外部Web端口（HAProxy转发）
+      - INTERNAL_PROXY_PROTOCOL_PORT=${INTERNAL_PROXY_PROTOCOL_PORT:-14445}  # PROXY Protocol内部端口
+      - BACKEND_MTPROXY_PORT=${BACKEND_MTPROXY_PORT:-444}         # MTProxy后端端口
+      - INTERNAL_API_PORT=${INTERNAL_API_PORT:-8080}              # API内部端口
+
+      # 向后兼容的端口别名
+      - MTPROXY_PORT=${EXTERNAL_PROXY_PORT:-14202}
+      - WEB_PORT=${EXTERNAL_WEB_PORT:-8989}
+      - INTERNAL_MTPROXY_PORT=${BACKEND_MTPROXY_PORT:-444}
+      - API_PORT=${INTERNAL_API_PORT:-8080}
+      - PROXY_PROTOCOL_PORT=${INTERNAL_PROXY_PROTOCOL_PORT:-14445}
+
+      # 遗留变量（向后兼容）
+      - NAT_MODE=true
+      - HAPROXY_ENABLED=true
+    
+    # 数据卷挂载
+    volumes:
+      - mtproxy_data:/data
+      - mtproxy_logs:/var/log
+      - mtproxy_config:/opt/mtproxy
+    
+    # 健康检查 - 使用新的多层次健康检查脚本
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    
+    # 安全配置
+    security_opt:
+      - no-new-privileges:true
+    
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 数据卷定义
+volumes:
+  mtproxy_data:
+    driver: local
+  mtproxy_logs:
+    driver: local  
+  mtproxy_config:
+    driver: local
+  haproxy_logs:
+    driver: local
