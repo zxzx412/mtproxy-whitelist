@@ -55,14 +55,14 @@ check_ports() {
     local BACKEND_MTPROXY_PORT=${BACKEND_MTPROXY_PORT:-444}
     local INTERNAL_API_PORT=${INTERNAL_API_PORT:-8080}
 
-    # 检查MTProxy后端端口
-    if ! ss -tlnp 2>/dev/null | grep -q ":${BACKEND_MTPROXY_PORT} "; then
+    # 检查MTProxy后端端口（使用更宽松的grep）
+    if ! ss -tln 2>/dev/null | grep -q ":${BACKEND_MTPROXY_PORT} "; then
         log_error "MTProxy backend port ${BACKEND_MTPROXY_PORT} not listening"
         return 1
     fi
 
-    # 检查API内部端口
-    if ! ss -tlnp 2>/dev/null | grep -q ":${INTERNAL_API_PORT} "; then
+    # 检查API内部端口（使用更宽松的grep）
+    if ! ss -tln 2>/dev/null | grep -q ":${INTERNAL_API_PORT} "; then
         log_error "API internal port ${INTERNAL_API_PORT} not listening"
         return 1
     fi
@@ -95,11 +95,11 @@ check_deployment_mode() {
     case "$DEPLOYMENT_MODE" in
         bridge)
             # Bridge模式：检查nginx监听内部端口443和8888
-            if ! ss -tlnp 2>/dev/null | grep nginx | grep -q ":443 "; then
+            if ! ss -tln 2>/dev/null | grep -q ":443 "; then
                 log_error "Bridge mode: Nginx not listening on port 443"
                 return 1
             fi
-            if ! ss -tlnp 2>/dev/null | grep nginx | grep -q ":8888 "; then
+            if ! ss -tln 2>/dev/null | grep -q ":8888 "; then
                 log_error "Bridge mode: Nginx not listening on port 8888"
                 return 1
             fi
@@ -107,7 +107,7 @@ check_deployment_mode() {
         nat-haproxy)
             # NAT+HAProxy模式：检查PROXY Protocol端口
             local INTERNAL_PROXY_PROTOCOL_PORT=${INTERNAL_PROXY_PROTOCOL_PORT:-14445}
-            if ! ss -tlnp 2>/dev/null | grep nginx | grep -q ":${INTERNAL_PROXY_PROTOCOL_PORT} "; then
+            if ! ss -tln 2>/dev/null | grep -q ":${INTERNAL_PROXY_PROTOCOL_PORT} "; then
                 log_error "NAT-HAProxy mode: Nginx not listening on PROXY Protocol port ${INTERNAL_PROXY_PROTOCOL_PORT}"
                 return 1
             fi
@@ -115,7 +115,7 @@ check_deployment_mode() {
         nat-direct)
             # NAT直连模式：检查外部端口
             local EXTERNAL_PROXY_PORT=${EXTERNAL_PROXY_PORT:-14202}
-            if ! ss -tlnp 2>/dev/null | grep nginx | grep -q ":${EXTERNAL_PROXY_PORT} "; then
+            if ! ss -tln 2>/dev/null | grep -q ":${EXTERNAL_PROXY_PORT} "; then
                 log_error "NAT-Direct mode: Nginx not listening on external port ${EXTERNAL_PROXY_PORT}"
                 return 1
             fi

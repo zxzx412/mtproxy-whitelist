@@ -48,8 +48,8 @@ services:
       test: ["CMD", "/usr/local/bin/health-check.sh"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
 
     # 资源限制
     deploy:
